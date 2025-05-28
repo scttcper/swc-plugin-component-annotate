@@ -1,4 +1,4 @@
-# SWC Plugin: React Component Annotate
+# SWC Plugin: Component Annotate
 
 A SWC plugin that automatically annotates React components with data attributes for component tracking and debugging.
 
@@ -23,9 +23,9 @@ This plugin transforms React components by adding data attributes that help with
 ## Installation
 
 ```bash
-npm install --save-dev swc-plugin-react-component-annotate
+npm install --save-dev swc-plugin-component-annotate
 # or
-yarn add -D swc-plugin-react-component-annotate
+yarn add -D swc-plugin-component-annotate
 ```
 
 ## Usage
@@ -39,7 +39,7 @@ Add the plugin to your `.swcrc` configuration:
   "jsc": {
     "experimental": {
       "plugins": [
-        ["swc-plugin-react-component-annotate", {}]
+        ["swc-plugin-component-annotate", {}]
       ]
     }
   }
@@ -53,7 +53,7 @@ Add the plugin to your `.swcrc` configuration:
   "jsc": {
     "experimental": {
       "plugins": [
-        ["swc-plugin-react-component-annotate", {
+        ["swc-plugin-component-annotate", {
           "native": false,
           "annotate-fragments": false,
           "ignored-components": ["MyIgnoredComponent"],
@@ -92,7 +92,7 @@ To use Sentry-specific attribute names for compatibility with Sentry's tracking:
   "jsc": {
     "experimental": {
       "plugins": [
-        ["swc-plugin-react-component-annotate", {
+        ["swc-plugin-component-annotate", {
           "component-attr": "data-sentry-component",
           "element-attr": "data-sentry-element",
           "source-file-attr": "data-sentry-source-file"
