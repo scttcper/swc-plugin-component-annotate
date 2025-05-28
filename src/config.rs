@@ -1,0 +1,73 @@
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PluginConfig {
+    /// Use React Native attribute names (camelCase) instead of web attributes (kebab-case)
+    #[serde(default)]
+    pub native: bool,
+    
+    /// Whether to annotate fragment children with component information
+    #[serde(default, rename = "annotate-fragments")]
+    pub annotate_fragments: bool,
+    
+    /// List of component names to ignore during annotation
+    #[serde(default, rename = "ignored-components")]
+    pub ignored_components: Vec<String>,
+    
+    /// Custom component attribute name (overrides default and native setting)
+    #[serde(default, rename = "component-attr")]
+    pub component_attr: Option<String>,
+    
+    /// Custom element attribute name (overrides default and native setting)
+    #[serde(default, rename = "element-attr")]
+    pub element_attr: Option<String>,
+    
+    /// Custom source file attribute name (overrides default and native setting)
+    #[serde(default, rename = "source-file-attr")]
+    pub source_file_attr: Option<String>,
+}
+
+impl Default for PluginConfig {
+    fn default() -> Self {
+        Self {
+            native: false,
+            annotate_fragments: false,
+            ignored_components: Vec::new(),
+            component_attr: None,
+            element_attr: None,
+            source_file_attr: None,
+        }
+    }
+}
+
+impl PluginConfig {
+    pub fn component_attr_name(&self) -> &str {
+        if let Some(ref custom) = self.component_attr {
+            custom
+        } else if self.native {
+            "dataComponent"
+        } else {
+            "data-component"
+        }
+    }
+    
+    pub fn element_attr_name(&self) -> &str {
+        if let Some(ref custom) = self.element_attr {
+            custom
+        } else if self.native {
+            "dataElement"
+        } else {
+            "data-element"
+        }
+    }
+    
+    pub fn source_file_attr_name(&self) -> &str {
+        if let Some(ref custom) = self.source_file_attr {
+            custom
+        } else if self.native {
+            "dataSourceFile"
+        } else {
+            "data-source-file"
+        }
+    }
+} 
