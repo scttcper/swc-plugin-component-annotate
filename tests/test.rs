@@ -11,7 +11,7 @@ use swc_core::{
         visit::visit_mut_pass,
     },
 };
-use swc_plugin_component_annotate::{ReactComponentAnnotateVisitor, config::PluginConfig};
+use swc_plugin_component_annotate::{config::PluginConfig, ReactComponentAnnotateVisitor};
 
 fn tr_with_config(config: PluginConfig) -> impl Pass {
     let unresolved_mark = Mark::new();
@@ -36,7 +36,7 @@ fn test(input: PathBuf) {
 
     // Check if this is the sentry attrs test
     let is_sentry_test = dir.file_name().unwrap().to_str().unwrap() == "react_sentry_attrs";
-    
+
     let config = if is_sentry_test {
         let mut config = PluginConfig::default();
         config.component_attr = Some("data-sentry-component".to_string());
@@ -46,7 +46,7 @@ fn test(input: PathBuf) {
     } else {
         PluginConfig::default()
     };
-    
+
     test_fixture(
         Syntax::Es(EsSyntax {
             jsx,

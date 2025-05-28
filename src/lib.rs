@@ -26,9 +26,10 @@ pub struct ReactComponentAnnotateVisitor {
 impl ReactComponentAnnotateVisitor {
     pub fn new(config: PluginConfig, filename: &FileName) -> Self {
         let source_file_name = extract_filename(filename);
-        
+
         // Pre-compute ignored components set for O(1) lookups
-        let ignored_components_set: FxHashSet<String> = config.ignored_components.iter().cloned().collect();
+        let ignored_components_set: FxHashSet<String> =
+            config.ignored_components.iter().cloned().collect();
 
         Self {
             config,
@@ -94,12 +95,13 @@ impl ReactComponentAnnotateVisitor {
                     }
                 }
                 JSXElementChild::JSXFragment(jsx_fragment) => {
-                    let prev_component = if self.config.annotate_fragments && !first_element_processed {
-                        first_element_processed = true;
-                        self.current_component_name.clone()
-                    } else {
-                        self.current_component_name.take()
-                    };
+                    let prev_component =
+                        if self.config.annotate_fragments && !first_element_processed {
+                            first_element_processed = true;
+                            self.current_component_name.clone()
+                        } else {
+                            self.current_component_name.take()
+                        };
                     jsx_fragment.visit_mut_with(self);
                     self.current_component_name = prev_component;
                 }
@@ -131,10 +133,11 @@ impl ReactComponentAnnotateVisitor {
         let is_ignored_html = self.should_ignore_element(&element_name);
 
         // Add element attribute (for non-HTML elements or when component name differs)
-        if !is_ignored_html 
+        if !is_ignored_html
             && !has_attribute(opening_element, self.config.element_attr_name())
-            && (self.config.component_attr_name() != self.config.element_attr_name() 
-                || self.current_component_name.is_none()) {
+            && (self.config.component_attr_name() != self.config.element_attr_name()
+                || self.current_component_name.is_none())
+        {
             opening_element.attrs.push(create_jsx_attr(
                 self.config.element_attr_name(),
                 &element_name,
@@ -154,7 +157,8 @@ impl ReactComponentAnnotateVisitor {
         // Add source file attribute
         if let Some(ref source_file) = self.source_file_name {
             if (self.current_component_name.is_some() || !is_ignored_html)
-                && !has_attribute(opening_element, self.config.source_file_attr_name()) {
+                && !has_attribute(opening_element, self.config.source_file_attr_name())
+            {
                 opening_element.attrs.push(create_jsx_attr(
                     self.config.source_file_attr_name(),
                     source_file,
@@ -166,7 +170,7 @@ impl ReactComponentAnnotateVisitor {
     fn find_jsx_in_function_body(&mut self, func: &mut Function, component_name: String) {
         if let Some(body) = &mut func.body {
             self.current_component_name = Some(component_name);
-            
+
             // Look for return statements
             for stmt in &mut body.stmts {
                 if let Stmt::Return(return_stmt) = stmt {
@@ -175,7 +179,7 @@ impl ReactComponentAnnotateVisitor {
                     }
                 }
             }
-            
+
             self.current_component_name = None;
         }
     }
@@ -214,12 +218,12 @@ impl VisitMut for ReactComponentAnnotateVisitor {
         // Handle arrow functions and function expressions assigned to variables
         if let Pat::Ident(ident) = &var_declarator.name {
             let component_name = ident.id.sym.to_string();
-            
+
             if let Some(init) = &mut var_declarator.init {
                 match init.as_mut() {
                     Expr::Arrow(arrow_func) => {
                         self.current_component_name = Some(component_name);
-                        
+
                         match arrow_func.body.as_mut() {
                             BlockStmtOrExpr::BlockStmt(block) => {
                                 // Look for return statements in block
@@ -236,7 +240,7 @@ impl VisitMut for ReactComponentAnnotateVisitor {
                                 self.process_return_expression(expr);
                             }
                         }
-                        
+
                         self.current_component_name = None;
                     }
                     Expr::Fn(func_expr) => {
@@ -246,13 +250,13 @@ impl VisitMut for ReactComponentAnnotateVisitor {
                 }
             }
         }
-        
+
         var_declarator.visit_mut_children_with(self);
     }
 
     fn visit_mut_class_decl(&mut self, class_decl: &mut ClassDecl) {
         let component_name = class_decl.ident.sym.to_string();
-        
+
         // Look for render method
         for member in &mut class_decl.class.body {
             if let ClassMember::Method(method) = member {
@@ -260,7 +264,7 @@ impl VisitMut for ReactComponentAnnotateVisitor {
                     if ident.sym.as_ref() == "render" {
                         if let Some(body) = &mut method.function.body {
                             self.current_component_name = Some(component_name.clone());
-                            
+
                             // Look for return statements
                             for stmt in &mut body.stmts {
                                 if let Stmt::Return(return_stmt) = stmt {
@@ -269,14 +273,14 @@ impl VisitMut for ReactComponentAnnotateVisitor {
                                     }
                                 }
                             }
-                            
+
                             self.current_component_name = None;
                         }
                     }
                 }
             }
         }
-        
+
         class_decl.visit_mut_children_with(self);
     }
 
@@ -291,11 +295,10 @@ impl VisitMut for ReactComponentAnnotateVisitor {
 
 fn extract_filename(filename: &FileName) -> Option<String> {
     match filename {
-        FileName::Real(path) => {
-            path.file_name()
-                .and_then(|name| name.to_str())
-                .map(|s| s.to_string())
-        }
+        FileName::Real(path) => path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(|s| s.to_string()),
         FileName::Custom(custom) => {
             if custom.contains('/') {
                 custom.split('/').last().map(|s| s.to_string())
@@ -319,8 +322,9 @@ pub fn process_transform(
     } else {
         PluginConfig::default()
     };
-    
-    let mut visitor = ReactComponentAnnotateVisitor::new(config, &FileName::Custom("unknown".to_string()));
+
+    let mut visitor =
+        ReactComponentAnnotateVisitor::new(config, &FileName::Custom("unknown".to_string()));
     program.visit_mut_with(&mut visitor);
     program
 }

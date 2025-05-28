@@ -5,9 +5,7 @@ use swc_core::ecma::ast::*;
 #[inline]
 pub fn is_react_fragment(element: &JSXElementName) -> bool {
     match element {
-        JSXElementName::Ident(ident) => {
-            ident.sym.as_ref() == "Fragment"
-        }
+        JSXElementName::Ident(ident) => ident.sym.as_ref() == "Fragment",
         JSXElementName::JSXMemberExpr(member_expr) => {
             // Check for React.Fragment
             if let JSXObject::Ident(obj) = &member_expr.obj {
@@ -40,10 +38,14 @@ fn get_member_expression_name(member_expr: &JSXMemberExpr) -> String {
     let obj_name = match &member_expr.obj {
         JSXObject::Ident(ident) => ident.sym.as_ref(),
         JSXObject::JSXMemberExpr(nested_member) => {
-            return format!("{}.{}", get_member_expression_name(nested_member), member_expr.prop.sym);
+            return format!(
+                "{}.{}",
+                get_member_expression_name(nested_member),
+                member_expr.prop.sym
+            );
         }
     };
-    
+
     format!("{}.{}", obj_name, member_expr.prop.sym)
 }
 
@@ -69,4 +71,4 @@ pub fn create_jsx_attr(name: &str, value: &str) -> JSXAttrOrSpread {
             raw: None,
         }))),
     })
-} 
+}

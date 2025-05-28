@@ -5,23 +5,23 @@ pub struct PluginConfig {
     /// Use React Native attribute names (camelCase) instead of web attributes (kebab-case)
     #[serde(default)]
     pub native: bool,
-    
+
     /// Whether to annotate fragment children with component information
     #[serde(default, rename = "annotate-fragments")]
     pub annotate_fragments: bool,
-    
+
     /// List of component names to ignore during annotation
     #[serde(default, rename = "ignored-components")]
     pub ignored_components: Vec<String>,
-    
+
     /// Custom component attribute name (overrides default and native setting)
     #[serde(default, rename = "component-attr")]
     pub component_attr: Option<String>,
-    
+
     /// Custom element attribute name (overrides default and native setting)
     #[serde(default, rename = "element-attr")]
     pub element_attr: Option<String>,
-    
+
     /// Custom source file attribute name (overrides default and native setting)
     #[serde(default, rename = "source-file-attr")]
     pub source_file_attr: Option<String>,
@@ -50,7 +50,7 @@ impl PluginConfig {
             "data-component"
         }
     }
-    
+
     pub fn element_attr_name(&self) -> &str {
         if let Some(ref custom) = self.element_attr {
             custom
@@ -60,7 +60,7 @@ impl PluginConfig {
             "data-element"
         }
     }
-    
+
     pub fn source_file_attr_name(&self) -> &str {
         if let Some(ref custom) = self.source_file_attr {
             custom
@@ -70,4 +70,4 @@ impl PluginConfig {
             "data-source-file"
         }
     }
-} 
+}
