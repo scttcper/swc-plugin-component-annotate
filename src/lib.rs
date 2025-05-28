@@ -13,7 +13,10 @@ use swc_core::{
         ast::*,
         visit::{noop_visit_mut_type, VisitMut, VisitMutWith},
     },
-    plugin::{plugin_transform, proxies::TransformPluginProgramMetadata},
+    plugin::{
+        metadata::TransformPluginMetadataContextKind, plugin_transform,
+        proxies::TransformPluginProgramMetadata,
+    },
 };
 
 pub struct ReactComponentAnnotateVisitor {
@@ -310,8 +313,16 @@ pub fn process_transform(
         PluginConfig::default()
     };
 
-    let mut visitor =
-        ReactComponentAnnotateVisitor::new(config, &FileName::Custom("unknown".to_string()));
+    // Try to get the actual filename from the metadata context
+    let filename = if let Some(filename_str) =
+        metadata.get_context(&TransformPluginMetadataContextKind::Filename)
+    {
+        FileName::Custom(filename_str)
+    } else {
+        FileName::Custom("unknown".to_string())
+    };
+
+    let mut visitor = ReactComponentAnnotateVisitor::new(config, &filename);
     program.visit_mut_with(&mut visitor);
     program
 }
