@@ -17,29 +17,20 @@ crate-type = ["cdylib", "lib"]
 rustc-hash = "2.1.1"
 serde = { version = "1.0", features = ["derive"], default-features = false }
 serde_json = { version = "1.0", default-features = false }
-swc_core = { version = "10.7.0", features = [
-    "ecma_ast",
-    "ecma_visit",
-    "swc_plugin",
-    "ecma_utils",
-    "swc_atoms",
-    "ecma_plugin_transform",
-] }
+swc_core = { version = "26.0.0", features = ["ecma_plugin_transform"] }
 
 
 [dev-dependencies]
-swc_core = { version = "10.7.0", features = [
-    "testing_transform",
-    "ecma_parser",
-] }
 testing = "4.0.0"
+swc_core = { version = "26.0.0", features = ["ecma_plugin_transform", "ecma_parser", "swc_ecma_transforms_testing"] }
 
 [profile.release]
 codegen-units = 1
 lto = true
+# Optimize for size
 opt-level = "s"
-panic = "abort"
-strip = "debuginfo"
+# Strip debug symbols
+strip = "symbols"
 
 [profile.dev]
 incremental = true

@@ -45,7 +45,7 @@ impl ReactComponentAnnotateVisitor {
     }
 
     #[inline]
-    fn should_ignore_component(&self, component_name: &str) -> bool {
+    pub fn should_ignore_component(&self, component_name: &str) -> bool {
         self.ignored_components_set.contains(component_name)
     }
 

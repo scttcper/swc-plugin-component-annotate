@@ -83,12 +83,22 @@ fn test(input: PathBuf) {
     // Check if this is the sentry attrs test
     let is_sentry_test = dir.file_name().unwrap().to_str().unwrap() == "react_sentry_attrs";
     let is_index_test = dir.file_name().unwrap().to_str().unwrap() == "react_index_file";
+    let is_ignored_components_test =
+        dir.file_name().unwrap().to_str().unwrap() == "react_ignored_components";
 
     let config = if is_sentry_test || is_index_test {
         let mut config = PluginConfig::default();
         config.component_attr = Some("data-sentry-component".to_string());
         config.element_attr = Some("data-sentry-element".to_string());
         config.source_file_attr = Some("data-sentry-source-file".to_string());
+        config
+    } else if is_ignored_components_test {
+        let mut config = PluginConfig::default();
+        config.ignored_components = vec![
+            "IgnoredComponent".to_string(),
+            "AnotherIgnoredComponent".to_string(),
+            "IgnoredClassComponent".to_string(),
+        ];
         config
     } else {
         PluginConfig::default()
@@ -111,4 +121,100 @@ fn test(input: PathBuf) {
         &output,
         Default::default(),
     );
+}
+
+#[test]
+fn test_ignored_components_config() {
+    use swc_plugin_component_annotate::config::PluginConfig;
+
+    // Test default config has no ignored components
+    let default_config = PluginConfig::default();
+    assert!(default_config.ignored_components.is_empty());
+
+    // Test JSON parsing with ignored components
+    let json_config = r#"{
+        "ignored-components": ["TestComponent", "AnotherComponent"],
+        "native": false
+    }"#;
+
+    let parsed_config: PluginConfig = serde_json::from_str(json_config).unwrap();
+    assert_eq!(parsed_config.ignored_components.len(), 2);
+    assert!(parsed_config
+        .ignored_components
+        .contains(&"TestComponent".to_string()));
+    assert!(parsed_config
+        .ignored_components
+        .contains(&"AnotherComponent".to_string()));
+    assert!(!parsed_config.native);
+}
+
+#[test]
+fn test_ignored_components_functionality() {
+    use swc_core::common::FileName;
+    use swc_plugin_component_annotate::{config::PluginConfig, ReactComponentAnnotateVisitor};
+
+    let mut config = PluginConfig::default();
+    config.ignored_components = vec!["IgnoredComponent".to_string()];
+
+    let filename = FileName::Custom("test.jsx".to_string());
+    let visitor = ReactComponentAnnotateVisitor::new(config, &filename);
+
+    // Test that the visitor correctly identifies ignored components
+    assert!(visitor.should_ignore_component("IgnoredComponent"));
+    assert!(!visitor.should_ignore_component("RegularComponent"));
+}
+
+#[test]
+fn test_plugin_config_parsing() {
+    use swc_plugin_component_annotate::config::PluginConfig;
+
+    // Test that the plugin correctly parses JSON configuration with all options
+    let config_json = r#"{
+        "ignored-components": ["TestIgnored", "AnotherIgnored"],
+        "native": true,
+        "annotate-fragments": true,
+        "component-attr": "customComponent",
+        "element-attr": "customElement",
+        "source-file-attr": "customSourceFile"
+    }"#;
+
+    let parsed_config: PluginConfig = serde_json::from_str(config_json).unwrap();
+
+    // Verify all configuration options are parsed correctly
+    assert_eq!(parsed_config.ignored_components.len(), 2);
+    assert!(parsed_config
+        .ignored_components
+        .contains(&"TestIgnored".to_string()));
+    assert!(parsed_config
+        .ignored_components
+        .contains(&"AnotherIgnored".to_string()));
+    assert!(parsed_config.native);
+    assert!(parsed_config.annotate_fragments);
+    assert_eq!(
+        parsed_config.component_attr,
+        Some("customComponent".to_string())
+    );
+    assert_eq!(
+        parsed_config.element_attr,
+        Some("customElement".to_string())
+    );
+    assert_eq!(
+        parsed_config.source_file_attr,
+        Some("customSourceFile".to_string())
+    );
+
+    // Test attribute name methods
+    assert_eq!(parsed_config.component_attr_name(), "customComponent");
+    assert_eq!(parsed_config.element_attr_name(), "customElement");
+    assert_eq!(parsed_config.source_file_attr_name(), "customSourceFile");
+
+    // Test native mode with default attributes
+    let native_config_json = r#"{
+        "native": true
+    }"#;
+
+    let native_config: PluginConfig = serde_json::from_str(native_config_json).unwrap();
+    assert_eq!(native_config.component_attr_name(), "dataComponent");
+    assert_eq!(native_config.element_attr_name(), "dataElement");
+    assert_eq!(native_config.source_file_attr_name(), "dataSourceFile");
 }
