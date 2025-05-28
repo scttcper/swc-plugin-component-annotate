@@ -19,7 +19,7 @@ macro_rules! path_info {
     ($path:expr) => {{
         let has_forward_slash = $path.contains('/');
         let has_backslash = $path.contains('\\');
-        
+
         if has_forward_slash {
             (true, false, '/', $path.split('/'))
         } else if has_backslash {
@@ -315,7 +315,11 @@ fn extract_filename(filename: &FileName) -> Option<String> {
                 // Check if it's an index file
                 if file_name.starts_with("index.") {
                     // Get parent directory name and combine with filename
-                    if let Some(parent) = path.parent().and_then(|p| p.file_name()).and_then(|n| n.to_str()) {
+                    if let Some(parent) = path
+                        .parent()
+                        .and_then(|p| p.file_name())
+                        .and_then(|n| n.to_str())
+                    {
                         Some(format!("{}/{}", parent, file_name))
                     } else {
                         Some(file_name.to_string())
@@ -330,13 +334,13 @@ fn extract_filename(filename: &FileName) -> Option<String> {
         FileName::Custom(custom) => {
             let (has_forward_slash, has_backslash, _separator, parts) = path_info!(custom);
             let parts_vec: Vec<&str> = parts.collect();
-            
+
             let file_part = if has_forward_slash || has_backslash {
                 parts_vec.last().copied().unwrap_or(custom)
             } else {
                 custom
             };
-            
+
             // Check if it's an index file
             if file_part.starts_with("index.") {
                 // Extract parent directory from the full path
@@ -345,7 +349,7 @@ fn extract_filename(filename: &FileName) -> Option<String> {
                 } else {
                     None
                 };
-                
+
                 if let Some(parent_name) = parent {
                     Some(format!("{}/{}", parent_name, file_part))
                 } else {
