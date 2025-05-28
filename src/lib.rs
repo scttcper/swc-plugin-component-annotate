@@ -294,21 +294,59 @@ impl VisitMut for ReactComponentAnnotateVisitor {
 
 fn extract_filename(filename: &FileName) -> Option<String> {
     match filename {
-        FileName::Real(path) => path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .map(|s| s.to_string()),
-        FileName::Custom(custom) => {
-            if custom.contains('/') {
-                custom.split('/').last().map(|s| s.to_string())
-            } else if custom.contains('\\') {
-                custom.split('\\').last().map(|s| s.to_string())
+        FileName::Real(path) => {
+            if let Some(file_name) = path.file_name().and_then(|name| name.to_str()) {
+                // Check if it's an index file
+                if file_name.starts_with("index.") {
+                    // Get parent directory name and combine with filename
+                    if let Some(parent) = path.parent().and_then(|p| p.file_name()).and_then(|n| n.to_str()) {
+                        Some(format!("{}/{}", parent, file_name))
+                    } else {
+                        Some(file_name.to_string())
+                    }
+                } else {
+                    Some(file_name.to_string())
+                }
             } else {
-                Some(custom.clone())
+                None
+            }
+        }
+        FileName::Custom(custom) => {
+            let file_part = if custom.contains('/') {
+                custom.split('/').last().unwrap_or(custom)
+            } else if custom.contains('\\') {
+                custom.split('\\').last().unwrap_or(custom)
+            } else {
+                custom
+            };
+            
+            // Check if it's an index file
+            if file_part.starts_with("index.") {
+                // Extract parent directory from the full path
+                let parent = if custom.contains('/') {
+                    custom.split('/').rev().nth(1)
+                } else if custom.contains('\\') {
+                    custom.split('\\').rev().nth(1)
+                } else {
+                    None
+                };
+                
+                if let Some(parent_name) = parent {
+                    Some(format!("{}/{}", parent_name, file_part))
+                } else {
+                    Some(file_part.to_string())
+                }
+            } else {
+                Some(file_part.to_string())
             }
         }
         _ => None,
     }
+}
+
+// Export for testing
+pub fn extract_filename_for_test(filename: &FileName) -> Option<String> {
+    extract_filename(filename)
 }
 
 #[plugin_transform]
