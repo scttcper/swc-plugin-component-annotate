@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PluginConfig {
     /// Use React Native attribute names (camelCase) instead of web attributes (kebab-case)
     #[serde(default)]
@@ -25,19 +25,6 @@ pub struct PluginConfig {
     /// Custom source file attribute name (overrides default and native setting)
     #[serde(default, rename = "source-file-attr")]
     pub source_file_attr: Option<String>,
-}
-
-impl Default for PluginConfig {
-    fn default() -> Self {
-        Self {
-            native: false,
-            annotate_fragments: false,
-            ignored_components: Vec::new(),
-            component_attr: None,
-            element_attr: None,
-            source_file_attr: None,
-        }
-    }
 }
 
 impl PluginConfig {

@@ -5,7 +5,6 @@ mod jsx_utils;
 use config::PluginConfig;
 use jsx_utils::*;
 use rustc_hash::FxHashSet;
-use serde_json;
 use swc_core::{
     common::FileName,
     ecma::{
