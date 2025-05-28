@@ -1,9 +1,11 @@
 pub mod config;
 mod constants;
 mod jsx_utils;
+pub mod path_utils;
 
 use config::PluginConfig;
 use jsx_utils::*;
+use path_utils::extract_filename;
 use rustc_hash::FxHashSet;
 use swc_core::{
     common::FileName,
@@ -13,22 +15,6 @@ use swc_core::{
     },
     plugin::{plugin_transform, proxies::TransformPluginProgramMetadata},
 };
-
-// Macro to efficiently determine path separator and extract components
-macro_rules! path_info {
-    ($path:expr) => {{
-        let has_forward_slash = $path.contains('/');
-        let has_backslash = $path.contains('\\');
-
-        if has_forward_slash {
-            (true, false, '/', $path.split('/'))
-        } else if has_backslash {
-            (false, true, '\\', $path.split('\\'))
-        } else {
-            (false, false, '/', $path.split('/')) // Default to forward slash for single component
-        }
-    }};
-}
 
 pub struct ReactComponentAnnotateVisitor {
     config: PluginConfig,
@@ -305,61 +291,6 @@ impl VisitMut for ReactComponentAnnotateVisitor {
 
     fn visit_mut_jsx_fragment(&mut self, jsx_fragment: &mut JSXFragment) {
         self.process_jsx_fragment(jsx_fragment);
-    }
-}
-
-fn extract_filename(filename: &FileName) -> Option<String> {
-    match filename {
-        FileName::Real(path) => {
-            if let Some(file_name) = path.file_name().and_then(|name| name.to_str()) {
-                // Check if it's an index file
-                if file_name.starts_with("index.") {
-                    // Get parent directory name and combine with filename
-                    if let Some(parent) = path
-                        .parent()
-                        .and_then(|p| p.file_name())
-                        .and_then(|n| n.to_str())
-                    {
-                        Some(format!("{}/{}", parent, file_name))
-                    } else {
-                        Some(file_name.to_string())
-                    }
-                } else {
-                    Some(file_name.to_string())
-                }
-            } else {
-                None
-            }
-        }
-        FileName::Custom(custom) => {
-            let (has_forward_slash, has_backslash, _separator, parts) = path_info!(custom);
-            let parts_vec: Vec<&str> = parts.collect();
-
-            let file_part = if has_forward_slash || has_backslash {
-                parts_vec.last().copied().unwrap_or(custom)
-            } else {
-                custom
-            };
-
-            // Check if it's an index file
-            if file_part.starts_with("index.") {
-                // Extract parent directory from the full path
-                let parent = if (has_forward_slash || has_backslash) && parts_vec.len() >= 2 {
-                    Some(parts_vec[parts_vec.len() - 2])
-                } else {
-                    None
-                };
-
-                if let Some(parent_name) = parent {
-                    Some(format!("{}/{}", parent_name, file_part))
-                } else {
-                    Some(file_part.to_string())
-                }
-            } else {
-                Some(file_part.to_string())
-            }
-        }
-        _ => None,
     }
 }
 

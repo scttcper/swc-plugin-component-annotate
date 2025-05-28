@@ -25,34 +25,34 @@ fn tr_with_config_and_filename(config: PluginConfig, filename: FileName) -> impl
 
 #[test]
 fn test_extract_filename() {
-    use swc_plugin_component_annotate::extract_filename_for_test;
+    use swc_plugin_component_annotate::path_utils::extract_filename;
 
     // Test regular files
     assert_eq!(
-        extract_filename_for_test(&FileName::Custom("components/Button.tsx".to_string())),
+        extract_filename(&FileName::Custom("components/Button.tsx".to_string())),
         Some("Button.tsx".to_string())
     );
 
     // Test index files - should include parent directory
     assert_eq!(
-        extract_filename_for_test(&FileName::Custom("components/Button/index.tsx".to_string())),
+        extract_filename(&FileName::Custom("components/Button/index.tsx".to_string())),
         Some("Button/index.tsx".to_string())
     );
 
     assert_eq!(
-        extract_filename_for_test(&FileName::Custom("src/pages/Home/index.jsx".to_string())),
+        extract_filename(&FileName::Custom("src/pages/Home/index.jsx".to_string())),
         Some("Home/index.jsx".to_string())
     );
 
     // Test index files without parent directory
     assert_eq!(
-        extract_filename_for_test(&FileName::Custom("index.tsx".to_string())),
+        extract_filename(&FileName::Custom("index.tsx".to_string())),
         Some("index.tsx".to_string())
     );
 
     // Test Windows paths
     assert_eq!(
-        extract_filename_for_test(&FileName::Custom(
+        extract_filename(&FileName::Custom(
             "components\\Button\\index.tsx".to_string()
         )),
         Some("Button/index.tsx".to_string())
@@ -60,12 +60,12 @@ fn test_extract_filename() {
 
     // Test other index file extensions
     assert_eq!(
-        extract_filename_for_test(&FileName::Custom("components/utils/index.ts".to_string())),
+        extract_filename(&FileName::Custom("components/utils/index.ts".to_string())),
         Some("utils/index.ts".to_string())
     );
 
     assert_eq!(
-        extract_filename_for_test(&FileName::Custom("components/helpers/index.js".to_string())),
+        extract_filename(&FileName::Custom("components/helpers/index.js".to_string())),
         Some("helpers/index.js".to_string())
     );
 }
