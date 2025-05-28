@@ -14,6 +14,22 @@ use swc_core::{
     plugin::{plugin_transform, proxies::TransformPluginProgramMetadata},
 };
 
+// Macro to efficiently determine path separator and extract components
+macro_rules! path_info {
+    ($path:expr) => {{
+        let has_forward_slash = $path.contains('/');
+        let has_backslash = $path.contains('\\');
+        
+        if has_forward_slash {
+            (true, false, '/', $path.split('/'))
+        } else if has_backslash {
+            (false, true, '\\', $path.split('\\'))
+        } else {
+            (false, false, '/', $path.split('/')) // Default to forward slash for single component
+        }
+    }};
+}
+
 pub struct ReactComponentAnnotateVisitor {
     config: PluginConfig,
     source_file_name: Option<String>,
@@ -312,10 +328,11 @@ fn extract_filename(filename: &FileName) -> Option<String> {
             }
         }
         FileName::Custom(custom) => {
-            let file_part = if custom.contains('/') {
-                custom.split('/').last().unwrap_or(custom)
-            } else if custom.contains('\\') {
-                custom.split('\\').last().unwrap_or(custom)
+            let (has_forward_slash, has_backslash, _separator, parts) = path_info!(custom);
+            let parts_vec: Vec<&str> = parts.collect();
+            
+            let file_part = if has_forward_slash || has_backslash {
+                parts_vec.last().copied().unwrap_or(custom)
             } else {
                 custom
             };
@@ -323,10 +340,8 @@ fn extract_filename(filename: &FileName) -> Option<String> {
             // Check if it's an index file
             if file_part.starts_with("index.") {
                 // Extract parent directory from the full path
-                let parent = if custom.contains('/') {
-                    custom.split('/').rev().nth(1)
-                } else if custom.contains('\\') {
-                    custom.split('\\').rev().nth(1)
+                let parent = if (has_forward_slash || has_backslash) && parts_vec.len() >= 2 {
+                    Some(parts_vec[parts_vec.len() - 2])
                 } else {
                     None
                 };
