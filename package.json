@@ -18,10 +18,10 @@
     "src",
     "swc_plugin_component_annotate.wasm"
   ],
-  "homepage": "https://github.com/scttcper/swc-plugin-react-component-annotate#readme",
-  "repository": "scttcper/swc-plugin-react-component-annotate",
+  "homepage": "https://github.com/scttcper/swc-plugin-component-annotate#readme",
+  "repository": "scttcper/swc-plugin-component-annotate",
   "bugs": {
-    "url": "https://github.com/scttcper/swc-plugin-react-component-annotate/issues"
+    "url": "https://github.com/scttcper/swc-plugin-component-annotate/issues"
   },
   "devDependencies": {},
   "peerDependencies": {},
