@@ -47,12 +47,6 @@ jobs:
           pnpm build
           pnpm test
 
-      # https://github.com/codecov/codecov-action
-      - name: coverage
-        uses: codecov/codecov-action@v5
-        with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-
   publish:
     needs: build
     runs-on: ubuntu-latest
