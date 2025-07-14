@@ -86,6 +86,7 @@ fn test(input: PathBuf) {
     let is_ignored_components_test =
         dir.file_name().unwrap().to_str().unwrap() == "react_ignored_components";
 
+
     let config = if is_sentry_test || is_index_test {
         let mut config = PluginConfig::default();
         config.component_attr = Some("data-sentry-component".to_string());
@@ -172,7 +173,6 @@ fn test_plugin_config_parsing() {
     let config_json = r#"{
         "ignored-components": ["TestIgnored", "AnotherIgnored"],
         "native": true,
-        "annotate-fragments": true,
         "component-attr": "customComponent",
         "element-attr": "customElement",
         "source-file-attr": "customSourceFile"
@@ -189,7 +189,6 @@ fn test_plugin_config_parsing() {
         .ignored_components
         .contains(&"AnotherIgnored".to_string()));
     assert!(parsed_config.native);
-    assert!(parsed_config.annotate_fragments);
     assert_eq!(
         parsed_config.component_attr,
         Some("customComponent".to_string())

@@ -55,7 +55,6 @@ Add the plugin to your `.swcrc` configuration:
       "plugins": [
         ["swc-plugin-component-annotate", {
           "native": false,
-          "annotate-fragments": false,
           "ignored-components": ["MyIgnoredComponent"],
           "component-attr": "data-sentry-component",
           "element-attr": "data-sentry-element",
@@ -72,8 +71,6 @@ Add the plugin to your `.swcrc` configuration:
 - **`native`** (boolean, default: `false`): Use React Native attribute names (camelCase)
   - `false`: `data-component`, `data-element`, `data-source-file`
   - `true`: `dataComponent`, `dataElement`, `dataSourceFile`
-
-- **`annotate-fragments`** (boolean, default: `false`): Whether to annotate fragment children with component information
 
 - **`ignored-components`** (array, default: `[]`): List of component names to skip during annotation
 
