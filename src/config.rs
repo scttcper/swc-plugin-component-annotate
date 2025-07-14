@@ -6,8 +6,6 @@ pub struct PluginConfig {
     #[serde(default)]
     pub native: bool,
 
-
-
     /// List of component names to ignore during annotation
     #[serde(default, rename = "ignored-components")]
     pub ignored_components: Vec<String>,

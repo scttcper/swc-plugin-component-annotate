@@ -57,7 +57,7 @@ impl ReactComponentAnnotateVisitor {
     fn process_jsx_element(&mut self, element: &mut JSXElement) {
         // Check if this is a named fragment (Fragment, React.Fragment)
         let is_fragment = is_react_fragment(&element.opening.name);
-        
+
         if !is_fragment {
             self.add_attributes_to_element(&mut element.opening);
         }

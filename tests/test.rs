@@ -86,7 +86,6 @@ fn test(input: PathBuf) {
     let is_ignored_components_test =
         dir.file_name().unwrap().to_str().unwrap() == "react_ignored_components";
 
-
     let config = if is_sentry_test || is_index_test {
         let mut config = PluginConfig::default();
         config.component_attr = Some("data-sentry-component".to_string());
