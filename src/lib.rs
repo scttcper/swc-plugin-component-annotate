@@ -55,26 +55,30 @@ impl ReactComponentAnnotateVisitor {
     }
 
     fn process_jsx_element(&mut self, element: &mut JSXElement) {
-        self.add_attributes_to_element(&mut element.opening);
+        // Check if this is a named fragment (Fragment, React.Fragment)
+        let is_fragment = is_react_fragment(&element.opening.name);
 
-        // Process children
+        if !is_fragment {
+            self.add_attributes_to_element(&mut element.opening);
+        }
+
+        // Process children - fragments are transparent containers
         for child in &mut element.children {
             match child {
                 JSXElementChild::JSXElement(jsx_element) => {
-                    // Children don't get component name, only element name
-                    let prev_component = self.current_component_name.take();
-                    jsx_element.visit_mut_with(self);
-                    self.current_component_name = prev_component;
+                    if is_fragment {
+                        // Fragment children are processed without clearing component name
+                        jsx_element.visit_mut_with(self);
+                    } else {
+                        // Non-fragment children don't get component name, only element name
+                        let prev_component = self.current_component_name.take();
+                        jsx_element.visit_mut_with(self);
+                        self.current_component_name = prev_component;
+                    }
                 }
                 JSXElementChild::JSXFragment(jsx_fragment) => {
-                    let prev_component = if self.config.annotate_fragments {
-                        // Keep component name for first child of fragment
-                        self.current_component_name.clone()
-                    } else {
-                        self.current_component_name.take()
-                    };
+                    // Fragments are always transparent containers
                     jsx_fragment.visit_mut_with(self);
-                    self.current_component_name = prev_component;
                 }
                 _ => {}
             }
@@ -82,32 +86,14 @@ impl ReactComponentAnnotateVisitor {
     }
 
     fn process_jsx_fragment(&mut self, fragment: &mut JSXFragment) {
-        // Process children
-        let mut first_element_processed = false;
+        // Fragments are transparent containers - just process children
         for child in &mut fragment.children {
             match child {
                 JSXElementChild::JSXElement(jsx_element) => {
-                    if self.config.annotate_fragments && !first_element_processed {
-                        // First child of fragment gets component name
-                        first_element_processed = true;
-                        jsx_element.visit_mut_with(self);
-                    } else {
-                        // Other children don't get component name
-                        let prev_component = self.current_component_name.take();
-                        jsx_element.visit_mut_with(self);
-                        self.current_component_name = prev_component;
-                    }
+                    jsx_element.visit_mut_with(self);
                 }
                 JSXElementChild::JSXFragment(jsx_fragment) => {
-                    let prev_component =
-                        if self.config.annotate_fragments && !first_element_processed {
-                            first_element_processed = true;
-                            self.current_component_name.clone()
-                        } else {
-                            self.current_component_name.take()
-                        };
                     jsx_fragment.visit_mut_with(self);
-                    self.current_component_name = prev_component;
                 }
                 _ => {}
             }
