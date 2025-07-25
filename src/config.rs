@@ -21,6 +21,10 @@ pub struct PluginConfig {
     /// Custom source file attribute name (overrides default and native setting)
     #[serde(default, rename = "source-file-attr")]
     pub source_file_attr: Option<String>,
+
+    /// Custom source path attribute name (overrides default and native setting)
+    #[serde(default, rename = "source-path-attr")]
+    pub source_path_attr: Option<String>,
 }
 
 impl PluginConfig {
@@ -51,6 +55,16 @@ impl PluginConfig {
             "dataSourceFile"
         } else {
             "data-source-file"
+        }
+    }
+
+    pub fn source_path_attr_name(&self) -> &str {
+        if let Some(ref custom) = self.source_path_attr {
+            custom
+        } else if self.native {
+            "dataSourcePath"
+        } else {
+            "data-source-path"
         }
     }
 }
