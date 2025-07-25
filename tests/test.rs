@@ -24,6 +24,35 @@ fn tr_with_config_and_filename(config: PluginConfig, filename: FileName) -> impl
 }
 
 #[test]
+fn test_extract_absolute_path() {
+    use swc_plugin_component_annotate::path_utils::extract_absolute_path;
+
+    // Test custom filename (absolute path)
+    assert_eq!(
+        extract_absolute_path(&FileName::Custom(
+            "/Users/jonasbadalic/code/swc-plugin-component-annotate/src/Component.jsx".to_string()
+        )),
+        Some(
+            "/Users/jonasbadalic/code/swc-plugin-component-annotate/src/Component.jsx".to_string()
+        )
+    );
+
+    // Test relative path
+    assert_eq!(
+        extract_absolute_path(&FileName::Custom("src/components/Button.tsx".to_string())),
+        Some("src/components/Button.tsx".to_string())
+    );
+
+    // Test Windows path
+    assert_eq!(
+        extract_absolute_path(&FileName::Custom(
+            "C:\\Users\\Name\\project\\src\\Component.jsx".to_string()
+        )),
+        Some("C:\\Users\\Name\\project\\src\\Component.jsx".to_string())
+    );
+}
+
+#[test]
 fn test_extract_filename() {
     use swc_plugin_component_annotate::path_utils::extract_filename;
 
@@ -85,6 +114,7 @@ fn test(input: PathBuf) {
     let is_index_test = dir.file_name().unwrap().to_str().unwrap() == "react_index_file";
     let is_ignored_components_test =
         dir.file_name().unwrap().to_str().unwrap() == "react_ignored_components";
+    let is_source_path_test = dir.file_name().unwrap().to_str().unwrap() == "react_source_path";
 
     let config = if is_sentry_test || is_index_test {
         let mut config = PluginConfig::default();
@@ -100,6 +130,10 @@ fn test(input: PathBuf) {
             "IgnoredClassComponent".to_string(),
         ];
         config
+    } else if is_source_path_test {
+        let mut config = PluginConfig::default();
+        config.source_path_attr = Some("data-source-path".to_string());
+        config
     } else {
         PluginConfig::default()
     };
@@ -107,6 +141,10 @@ fn test(input: PathBuf) {
     // Use custom filename for index test
     let filename = if is_index_test {
         FileName::Custom("react_index_file/index.jsx".to_string())
+    } else if is_source_path_test {
+        FileName::Custom(
+            "/mock/absolute/path/tests/fixture/react_source_path/input.jsx".to_string(),
+        )
     } else {
         FileName::Custom("test.jsx".to_string())
     };
@@ -174,7 +212,8 @@ fn test_plugin_config_parsing() {
         "native": true,
         "component-attr": "customComponent",
         "element-attr": "customElement",
-        "source-file-attr": "customSourceFile"
+        "source-file-attr": "customSourceFile",
+        "source-path-attr": "customSourcePath"
     }"#;
 
     let parsed_config: PluginConfig = serde_json::from_str(config_json).unwrap();
@@ -200,11 +239,16 @@ fn test_plugin_config_parsing() {
         parsed_config.source_file_attr,
         Some("customSourceFile".to_string())
     );
+    assert_eq!(
+        parsed_config.source_path_attr,
+        Some("customSourcePath".to_string())
+    );
 
     // Test attribute name methods
     assert_eq!(parsed_config.component_attr_name(), "customComponent");
     assert_eq!(parsed_config.element_attr_name(), "customElement");
     assert_eq!(parsed_config.source_file_attr_name(), "customSourceFile");
+    assert_eq!(parsed_config.source_path_attr_name(), "customSourcePath");
 
     // Test native mode with default attributes
     let native_config_json = r#"{
@@ -215,4 +259,5 @@ fn test_plugin_config_parsing() {
     assert_eq!(native_config.component_attr_name(), "dataComponent");
     assert_eq!(native_config.element_attr_name(), "dataElement");
     assert_eq!(native_config.source_file_attr_name(), "dataSourceFile");
+    assert_eq!(native_config.source_path_attr_name(), "dataSourcePath");
 }

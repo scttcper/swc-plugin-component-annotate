@@ -5,7 +5,7 @@ pub mod path_utils;
 
 use config::PluginConfig;
 use jsx_utils::*;
-use path_utils::extract_filename;
+use path_utils::{extract_absolute_path, extract_filename};
 use rustc_hash::FxHashSet;
 use swc_core::{
     common::FileName,
@@ -22,6 +22,7 @@ use swc_core::{
 pub struct ReactComponentAnnotateVisitor {
     config: PluginConfig,
     source_file_name: Option<String>,
+    source_file_path: Option<String>,
     current_component_name: Option<String>,
     ignored_elements: FxHashSet<&'static str>,
     ignored_components_set: FxHashSet<String>,
@@ -30,6 +31,7 @@ pub struct ReactComponentAnnotateVisitor {
 impl ReactComponentAnnotateVisitor {
     pub fn new(config: PluginConfig, filename: &FileName) -> Self {
         let source_file_name = extract_filename(filename);
+        let source_file_path = extract_absolute_path(filename);
 
         // Pre-compute ignored components set for O(1) lookups
         let ignored_components_set: FxHashSet<String> =
@@ -38,6 +40,7 @@ impl ReactComponentAnnotateVisitor {
         Self {
             config,
             source_file_name,
+            source_file_path,
             current_component_name: None,
             ignored_elements: constants::default_ignored_elements(),
             ignored_components_set,
@@ -153,6 +156,20 @@ impl ReactComponentAnnotateVisitor {
                     self.config.source_file_attr_name(),
                     source_file,
                 ));
+            }
+        }
+
+        // Add source path attribute (only if explicitly configured)
+        if self.config.source_path_attr.is_some() {
+            if let Some(ref source_path) = self.source_file_path {
+                if (self.current_component_name.is_some() || !is_ignored_html)
+                    && !has_attribute(opening_element, self.config.source_path_attr_name())
+                {
+                    opening_element.attrs.push(create_jsx_attr(
+                        self.config.source_path_attr_name(),
+                        source_path,
+                    ));
+                }
             }
         }
     }
