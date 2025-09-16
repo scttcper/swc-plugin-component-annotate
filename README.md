@@ -24,8 +24,6 @@ This plugin transforms React components by adding data attributes that help with
 
 ```bash
 npm install --save-dev swc-plugin-component-annotate
-# or
-yarn add -D swc-plugin-component-annotate
 ```
 
 ## Usage
