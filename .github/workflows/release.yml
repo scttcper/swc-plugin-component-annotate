@@ -5,11 +5,6 @@ on:
     branches: [main]
     types: [completed]
 
-env:
-  CARGO_INCREMENTAL: 0
-  CARGO_PROFILE_RELEASE_LTO: "fat"
-  CARGO_TERM_COLOR: always
-
 permissions:
   contents: write
   deployments: write
@@ -18,42 +13,9 @@ permissions:
   id-token: write
 
 jobs:
-  build:
-    name: Build Rust
-    runs-on: ubuntu-latest
-    if: ${{ github.event.workflow_run.conclusion == 'success' }}
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
-
-      # https://github.com/wyvox/action-setup-pnpm
-      - uses: wyvox/action-setup-pnpm@v3
-        with: { node-version: 24 }
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: wasm32-unknown-unknown
-
-      - name: Cache Cargo
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-
-      - name: Build for release
-        run: pnpm build --release
-
   release:
     name: NPM Release
-    needs: build
     if: ${{ github.event.workflow_run.conclusion == 'success' }}
-    uses: scttcper/github-actions/.github/workflows/npm-release.yml@main
+    uses: scttcper/github-actions/.github/workflows/npm-wasm-release.yml@main
     secrets:
       GIT_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-    with:
-      skip_build: true
