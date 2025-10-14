@@ -115,6 +115,8 @@ fn test(input: PathBuf) {
     let is_ignored_components_test =
         dir.file_name().unwrap().to_str().unwrap() == "react_ignored_components";
     let is_source_path_test = dir.file_name().unwrap().to_str().unwrap() == "react_source_path";
+    let is_inline_styled_test =
+        dir.file_name().unwrap().to_str().unwrap() == "react_inline_styled_component";
 
     let config = if is_sentry_test || is_index_test {
         let mut config = PluginConfig::default();
@@ -133,6 +135,10 @@ fn test(input: PathBuf) {
     } else if is_source_path_test {
         let mut config = PluginConfig::default();
         config.source_path_attr = Some("data-source-path".to_string());
+        config
+    } else if is_inline_styled_test {
+        let mut config = PluginConfig::default();
+        config.rewrite_emotion_styled = true;
         config
     } else {
         PluginConfig::default()

@@ -5,7 +5,7 @@ const Button = ({ children, ...props })=>{
     return <button {...props} data-component="Button" data-source-file="test.jsx">{children}</button>;
 };
 // Styled component using component reference
-const StyledButton = styled((props)=><Button data-element="Button" data-source-file="test.jsx" {...props}/>);
+const StyledButton = styled((props)=><Button data-element="StyledButton" data-source-file="test.jsx" {...props}/>);
 // Another regular component
 const Card = (props)=>{
     return <div className="card" data-component="Card" data-source-file="test.jsx">
@@ -14,7 +14,7 @@ const Card = (props)=>{
     </div>;
 };
 // Styled component using component reference
-const StyledCard = styled((props)=><Card data-element="Card" data-source-file="test.jsx" {...props}/>);
+const StyledCard = styled((props)=><Card data-element="StyledCard" data-source-file="test.jsx" {...props}/>);
 // Component that uses the styled components
 const MyComponent = ()=>{
     return <div data-component="MyComponent" data-source-file="test.jsx">

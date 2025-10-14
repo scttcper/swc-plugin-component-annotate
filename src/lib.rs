@@ -243,7 +243,7 @@ impl ReactComponentAnnotateVisitor {
     }
 
     /// Transform styled(ComponentRef) to styled(props => <ComponentRef data-element="..." {...props} />)
-    fn transform_styled_call(&self, call_expr: &mut CallExpr, component_name: String) {
+    fn transform_styled_call(&self, call_expr: &mut CallExpr, ref_component_name: String, styled_component_name: String) {
         use swc_core::common::{SyntaxContext, DUMMY_SP};
 
         // Create the props parameter: props
@@ -255,10 +255,10 @@ impl ReactComponentAnnotateVisitor {
         // Build attributes in order: data attributes first, then spread
         let mut attrs = vec![];
 
-        // Add data-element attribute
+        // Add data-element attribute using the styled component variable name
         attrs.push(create_jsx_attr(
             self.config.element_attr_name(),
-            &component_name,
+            &styled_component_name,
         ));
 
         // Add data-source-file attribute
@@ -294,7 +294,7 @@ impl ReactComponentAnnotateVisitor {
             span: DUMMY_SP,
             opening: JSXOpeningElement {
                 name: JSXElementName::Ident(Ident::new(
-                    component_name.into(),
+                    ref_component_name.into(),
                     DUMMY_SP,
                     SyntaxContext::empty(),
                 )),
@@ -333,8 +333,8 @@ impl VisitMut for ReactComponentAnnotateVisitor {
     noop_visit_mut_type!();
 
     fn visit_mut_import_decl(&mut self, import_decl: &mut ImportDecl) {
-        // Track imports from @emotion/styled
-        if import_decl.src.value.as_ref() == "@emotion/styled" {
+        // Track imports from @emotion/styled (only if enabled)
+        if self.config.rewrite_emotion_styled && import_decl.src.value.as_ref() == "@emotion/styled" {
             for specifier in &import_decl.specifiers {
                 match specifier {
                     // Default import: import styled from '@emotion/styled'
@@ -376,12 +376,15 @@ impl VisitMut for ReactComponentAnnotateVisitor {
             if let Some(init) = &mut var_declarator.init {
                 match init.as_mut() {
                     Expr::Call(call_expr) => {
-                        // Check if this is a styled(ComponentRef) pattern
-                        if let Some(ref_component_name) =
-                            self.is_styled_call_with_component_ref(call_expr)
-                        {
-                            // Transform styled(ComponentRef) to styled(props => <ComponentRef {...props} />)
-                            self.transform_styled_call(call_expr, ref_component_name);
+                        // Check if this is a styled(ComponentRef) pattern (only if enabled)
+                        if self.config.rewrite_emotion_styled {
+                            if let Some(ref_component_name) =
+                                self.is_styled_call_with_component_ref(call_expr)
+                            {
+                                // Transform styled(ComponentRef) to styled(props => <ComponentRef {...props} />)
+                                // Use the styled component variable name (e.g., StyledButton) as data-element
+                                self.transform_styled_call(call_expr, ref_component_name, component_name.clone());
+                            }
                         }
                     }
                     Expr::Arrow(arrow_func) => {
