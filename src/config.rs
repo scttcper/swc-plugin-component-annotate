@@ -25,6 +25,10 @@ pub struct PluginConfig {
     /// Custom source path attribute name (overrides default and native setting)
     #[serde(default, rename = "source-path-attr")]
     pub source_path_attr: Option<String>,
+
+    /// Enable rewriting emotion styled components to inject data attributes
+    #[serde(default, rename = "rewrite-emotion-styled")]
+    pub experimental_rewrite_emotion_styled: bool,
 }
 
 impl PluginConfig {

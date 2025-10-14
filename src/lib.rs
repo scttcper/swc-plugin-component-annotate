@@ -26,6 +26,8 @@ pub struct ReactComponentAnnotateVisitor {
     current_component_name: Option<String>,
     ignored_elements: FxHashSet<&'static str>,
     ignored_components_set: FxHashSet<String>,
+    /// Track the local identifier name for `styled` from @emotion/styled
+    styled_import: Option<String>,
 }
 
 impl ReactComponentAnnotateVisitor {
@@ -44,6 +46,7 @@ impl ReactComponentAnnotateVisitor {
             current_component_name: None,
             ignored_elements: constants::default_ignored_elements(),
             ignored_components_set,
+            styled_import: None,
         }
     }
 
@@ -210,10 +213,161 @@ impl ReactComponentAnnotateVisitor {
             _ => {}
         }
     }
+
+    /// Check if a call expression matches styled(ComponentRef) pattern
+    fn is_styled_call_with_component_ref(&self, call_expr: &CallExpr) -> Option<String> {
+        // Check if we have a tracked styled import
+        let styled_name = self.styled_import.as_ref()?;
+
+        // Check if the callee is the styled identifier
+        let callee_name = match call_expr.callee.as_expr() {
+            Some(expr) => match expr.as_ref() {
+                Expr::Ident(ident) => ident.sym.as_ref(),
+                _ => return None,
+            },
+            _ => return None,
+        };
+
+        if callee_name != styled_name {
+            return None;
+        }
+
+        // Check if the first argument is an identifier (component reference)
+        if let Some(ExprOrSpread { spread: None, expr }) = call_expr.args.first() {
+            if let Expr::Ident(ident) = expr.as_ref() {
+                return Some(ident.sym.to_string());
+            }
+        }
+
+        None
+    }
+
+    /// Transform styled(ComponentRef) to styled(props => <ComponentRef data-element="..." {...props} />)
+    fn transform_styled_call(
+        &self,
+        call_expr: &mut CallExpr,
+        ref_component_name: String,
+        styled_component_name: String,
+    ) {
+        use swc_core::common::{SyntaxContext, DUMMY_SP};
+
+        // Create the props parameter: props
+        let props_param = Pat::Ident(BindingIdent {
+            id: Ident::new("props".into(), DUMMY_SP, SyntaxContext::empty()),
+            type_ann: None,
+        });
+
+        // Build attributes in order: data attributes first, then spread
+        let mut attrs = vec![];
+
+        // Add data-element attribute using the styled component variable name
+        attrs.push(create_jsx_attr(
+            self.config.element_attr_name(),
+            &styled_component_name,
+        ));
+
+        // Add data-source-file attribute
+        if let Some(ref source_file) = self.source_file_name {
+            attrs.push(create_jsx_attr(
+                self.config.source_file_attr_name(),
+                source_file,
+            ));
+        }
+
+        // Add data-source-path attribute (only if explicitly configured)
+        if self.config.source_path_attr.is_some() {
+            if let Some(ref source_path) = self.source_file_path {
+                attrs.push(create_jsx_attr(
+                    self.config.source_path_attr_name(),
+                    source_path,
+                ));
+            }
+        }
+
+        // Add spread attribute AFTER data attributes: {...props}
+        attrs.push(JSXAttrOrSpread::SpreadElement(SpreadElement {
+            dot3_token: DUMMY_SP,
+            expr: Box::new(Expr::Ident(Ident::new(
+                "props".into(),
+                DUMMY_SP,
+                SyntaxContext::empty(),
+            ))),
+        }));
+
+        // Create JSX element: <ComponentRef data-element="..." data-source-file="..." {...props} />
+        let jsx_element = JSXElement {
+            span: DUMMY_SP,
+            opening: JSXOpeningElement {
+                name: JSXElementName::Ident(Ident::new(
+                    ref_component_name.into(),
+                    DUMMY_SP,
+                    SyntaxContext::empty(),
+                )),
+                span: DUMMY_SP,
+                attrs,
+                self_closing: true,
+                type_args: None,
+            },
+            children: vec![],
+            closing: None,
+        };
+
+        // Create arrow function: props => <ComponentRef data-element="..." {...props} />
+        let arrow_func = ArrowExpr {
+            span: DUMMY_SP,
+            ctxt: SyntaxContext::empty(),
+            params: vec![props_param],
+            body: Box::new(BlockStmtOrExpr::Expr(Box::new(Expr::JSXElement(Box::new(
+                jsx_element,
+            ))))),
+            is_async: false,
+            is_generator: false,
+            type_params: None,
+            return_type: None,
+        };
+
+        // Replace the first argument with the arrow function
+        call_expr.args[0] = ExprOrSpread {
+            spread: None,
+            expr: Box::new(Expr::Arrow(arrow_func)),
+        };
+    }
 }
 
 impl VisitMut for ReactComponentAnnotateVisitor {
     noop_visit_mut_type!();
+
+    fn visit_mut_import_decl(&mut self, import_decl: &mut ImportDecl) {
+        // Track imports from @emotion/styled (only if enabled)
+        if self.config.experimental_rewrite_emotion_styled
+            && import_decl.src.value.as_ref() == "@emotion/styled"
+        {
+            for specifier in &import_decl.specifiers {
+                match specifier {
+                    // Default import: import styled from '@emotion/styled'
+                    ImportSpecifier::Default(default_import) => {
+                        self.styled_import = Some(default_import.local.sym.to_string());
+                    }
+                    // Named import: import { styled } from '@emotion/styled'
+                    ImportSpecifier::Named(named_import) => {
+                        // Check if the imported name is 'default' or 'styled'
+                        let imported_name = match &named_import.imported {
+                            Some(ModuleExportName::Ident(ident)) => ident.sym.as_ref(),
+                            None => named_import.local.sym.as_ref(),
+                            _ => continue,
+                        };
+
+                        if imported_name == "default" || imported_name == "styled" {
+                            self.styled_import = Some(named_import.local.sym.to_string());
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        import_decl.visit_mut_children_with(self);
+    }
 
     fn visit_mut_fn_decl(&mut self, func_decl: &mut FnDecl) {
         let component_name = func_decl.ident.sym.to_string();
@@ -228,6 +382,22 @@ impl VisitMut for ReactComponentAnnotateVisitor {
 
             if let Some(init) = &mut var_declarator.init {
                 match init.as_mut() {
+                    Expr::Call(call_expr) => {
+                        // Check if this is a styled(ComponentRef) pattern (only if enabled)
+                        if self.config.experimental_rewrite_emotion_styled {
+                            if let Some(ref_component_name) =
+                                self.is_styled_call_with_component_ref(call_expr)
+                            {
+                                // Transform styled(ComponentRef) to styled(props => <ComponentRef {...props} />)
+                                // Use the styled component variable name (e.g., StyledButton) as data-element
+                                self.transform_styled_call(
+                                    call_expr,
+                                    ref_component_name,
+                                    component_name.clone(),
+                                );
+                            }
+                        }
+                    }
                     Expr::Arrow(arrow_func) => {
                         self.current_component_name = Some(component_name);
 

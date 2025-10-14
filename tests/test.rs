@@ -115,25 +115,35 @@ fn test(input: PathBuf) {
     let is_ignored_components_test =
         dir.file_name().unwrap().to_str().unwrap() == "react_ignored_components";
     let is_source_path_test = dir.file_name().unwrap().to_str().unwrap() == "react_source_path";
+    let is_inline_styled_test =
+        dir.file_name().unwrap().to_str().unwrap() == "react_inline_styled_component";
 
     let config = if is_sentry_test || is_index_test {
-        let mut config = PluginConfig::default();
-        config.component_attr = Some("data-sentry-component".to_string());
-        config.element_attr = Some("data-sentry-element".to_string());
-        config.source_file_attr = Some("data-sentry-source-file".to_string());
-        config
+        PluginConfig {
+            component_attr: Some("data-sentry-component".to_string()),
+            element_attr: Some("data-sentry-element".to_string()),
+            source_file_attr: Some("data-sentry-source-file".to_string()),
+            ..Default::default()
+        }
     } else if is_ignored_components_test {
-        let mut config = PluginConfig::default();
-        config.ignored_components = vec![
-            "IgnoredComponent".to_string(),
-            "AnotherIgnoredComponent".to_string(),
-            "IgnoredClassComponent".to_string(),
-        ];
-        config
+        PluginConfig {
+            ignored_components: vec![
+                "IgnoredComponent".to_string(),
+                "AnotherIgnoredComponent".to_string(),
+                "IgnoredClassComponent".to_string(),
+            ],
+            ..Default::default()
+        }
     } else if is_source_path_test {
-        let mut config = PluginConfig::default();
-        config.source_path_attr = Some("data-source-path".to_string());
-        config
+        PluginConfig {
+            source_path_attr: Some("data-source-path".to_string()),
+            ..Default::default()
+        }
+    } else if is_inline_styled_test {
+        PluginConfig {
+            experimental_rewrite_emotion_styled: true,
+            ..Default::default()
+        }
     } else {
         PluginConfig::default()
     };
@@ -191,8 +201,10 @@ fn test_ignored_components_functionality() {
     use swc_core::common::FileName;
     use swc_plugin_component_annotate::{config::PluginConfig, ReactComponentAnnotateVisitor};
 
-    let mut config = PluginConfig::default();
-    config.ignored_components = vec!["IgnoredComponent".to_string()];
+    let config = PluginConfig {
+        ignored_components: vec!["IgnoredComponent".to_string()],
+        ..Default::default()
+    };
 
     let filename = FileName::Custom("test.jsx".to_string());
     let visitor = ReactComponentAnnotateVisitor::new(config, &filename);
