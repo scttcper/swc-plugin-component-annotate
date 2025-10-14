@@ -339,7 +339,8 @@ impl VisitMut for ReactComponentAnnotateVisitor {
 
     fn visit_mut_import_decl(&mut self, import_decl: &mut ImportDecl) {
         // Track imports from @emotion/styled (only if enabled)
-        if self.config.rewrite_emotion_styled && import_decl.src.value.as_ref() == "@emotion/styled"
+        if self.config.experimental_rewrite_emotion_styled
+            && import_decl.src.value.as_ref() == "@emotion/styled"
         {
             for specifier in &import_decl.specifiers {
                 match specifier {
@@ -383,7 +384,7 @@ impl VisitMut for ReactComponentAnnotateVisitor {
                 match init.as_mut() {
                     Expr::Call(call_expr) => {
                         // Check if this is a styled(ComponentRef) pattern (only if enabled)
-                        if self.config.rewrite_emotion_styled {
+                        if self.config.experimental_rewrite_emotion_styled {
                             if let Some(ref_component_name) =
                                 self.is_styled_call_with_component_ref(call_expr)
                             {

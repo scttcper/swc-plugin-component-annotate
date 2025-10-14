@@ -141,7 +141,7 @@ fn test(input: PathBuf) {
         }
     } else if is_inline_styled_test {
         PluginConfig {
-            rewrite_emotion_styled: true,
+            experimental_rewrite_emotion_styled: true,
             ..Default::default()
         }
     } else {

@@ -28,7 +28,7 @@ pub struct PluginConfig {
 
     /// Enable rewriting emotion styled components to inject data attributes
     #[serde(default, rename = "rewrite-emotion-styled")]
-    pub rewrite_emotion_styled: bool,
+    pub experimental_rewrite_emotion_styled: bool,
 }
 
 impl PluginConfig {
