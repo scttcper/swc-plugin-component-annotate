@@ -25,5 +25,14 @@
   },
   "devDependencies": {},
   "peerDependencies": {},
-  "packageManager": "pnpm@10.15.0"
+  "packageManager": "pnpm@10.18.3",
+  "release": {
+    "branches": [
+      "main"
+    ]
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  }
 }

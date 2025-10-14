@@ -1,4 +1,4 @@
-# SWC Plugin: Component Annotate
+# SWC Plugin: Component Annotate [![npm badge](https://img.shields.io/npm/v/swc-plugin-component-annotate)](https://www.npmjs.com/package/swc-plugin-component-annotate)
 
 A SWC plugin that automatically annotates React components with data attributes for component tracking and debugging.
 

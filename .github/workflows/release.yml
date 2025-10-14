@@ -1,22 +1,31 @@
-name: CI
-
+name: Release
 on:
-  push:
-    branches:
-      - main
-  pull_request:
+  workflow_run:
+    workflows: ['CI']
+    branches: [main]
+    types: [completed]
 
 env:
   CARGO_INCREMENTAL: 0
   CARGO_PROFILE_RELEASE_LTO: "fat"
   CARGO_TERM_COLOR: always
 
+permissions:
+  contents: write
+  deployments: write
+  issues: write
+  pull-requests: write
+  id-token: write
+
 jobs:
   build:
+    name: Build Rust
     runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
     steps:
-      # https://github.com/actions/checkout
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
 
       # https://github.com/wyvox/action-setup-pnpm
       - uses: wyvox/action-setup-pnpm@v3
@@ -36,13 +45,15 @@ jobs:
             target
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
-      - name: lint
-        run: |
-          cargo fmt -- --check
-          cargo clippy -- -D warnings
+      - name: Build for release
+        run: pnpm build --release
 
-      - name: test
-        run: |
-          cargo test
-          pnpm build
-          pnpm test
+  release:
+    name: NPM Release
+    needs: build
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    uses: scttcper/github-actions/.github/workflows/npm-release.yml@main
+    secrets:
+      GIT_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    with:
+      skip_build: true
