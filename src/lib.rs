@@ -243,7 +243,12 @@ impl ReactComponentAnnotateVisitor {
     }
 
     /// Transform styled(ComponentRef) to styled(props => <ComponentRef data-element="..." {...props} />)
-    fn transform_styled_call(&self, call_expr: &mut CallExpr, ref_component_name: String, styled_component_name: String) {
+    fn transform_styled_call(
+        &self,
+        call_expr: &mut CallExpr,
+        ref_component_name: String,
+        styled_component_name: String,
+    ) {
         use swc_core::common::{SyntaxContext, DUMMY_SP};
 
         // Create the props parameter: props
@@ -334,7 +339,8 @@ impl VisitMut for ReactComponentAnnotateVisitor {
 
     fn visit_mut_import_decl(&mut self, import_decl: &mut ImportDecl) {
         // Track imports from @emotion/styled (only if enabled)
-        if self.config.rewrite_emotion_styled && import_decl.src.value.as_ref() == "@emotion/styled" {
+        if self.config.rewrite_emotion_styled && import_decl.src.value.as_ref() == "@emotion/styled"
+        {
             for specifier in &import_decl.specifiers {
                 match specifier {
                     // Default import: import styled from '@emotion/styled'
@@ -383,7 +389,11 @@ impl VisitMut for ReactComponentAnnotateVisitor {
                             {
                                 // Transform styled(ComponentRef) to styled(props => <ComponentRef {...props} />)
                                 // Use the styled component variable name (e.g., StyledButton) as data-element
-                                self.transform_styled_call(call_expr, ref_component_name, component_name.clone());
+                                self.transform_styled_call(
+                                    call_expr,
+                                    ref_component_name,
+                                    component_name.clone(),
+                                );
                             }
                         }
                     }
