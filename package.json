@@ -19,7 +19,10 @@
     "swc_plugin_component_annotate.wasm"
   ],
   "homepage": "https://github.com/scttcper/swc-plugin-component-annotate#readme",
-  "repository": "scttcper/swc-plugin-component-annotate",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/scttcper/swc-plugin-component-annotate.git"
+  },
   "bugs": {
     "url": "https://github.com/scttcper/swc-plugin-component-annotate/issues"
   },
@@ -32,7 +35,6 @@
     ]
   },
   "publishConfig": {
-    "access": "public",
-    "provenance": true
+    "access": "public"
   }
 }
