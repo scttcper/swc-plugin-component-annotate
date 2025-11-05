@@ -340,7 +340,7 @@ impl VisitMut for ReactComponentAnnotateVisitor {
     fn visit_mut_import_decl(&mut self, import_decl: &mut ImportDecl) {
         // Track imports from @emotion/styled (only if enabled)
         if self.config.experimental_rewrite_emotion_styled
-            && import_decl.src.value.as_ref() == "@emotion/styled"
+            && import_decl.src.value == "@emotion/styled"
         {
             for specifier in &import_decl.specifiers {
                 match specifier {

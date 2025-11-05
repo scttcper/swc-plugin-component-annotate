@@ -65,10 +65,10 @@ pub fn create_jsx_attr(name: &str, value: &str) -> JSXAttrOrSpread {
     JSXAttrOrSpread::JSXAttr(JSXAttr {
         span: Default::default(),
         name: JSXAttrName::Ident(IdentName::new(name.into(), Default::default())),
-        value: Some(JSXAttrValue::Lit(Lit::Str(Str {
+        value: Some(JSXAttrValue::Str(Str {
             span: Default::default(),
             value: value.into(),
             raw: None,
-        }))),
+        })),
     })
 }
