@@ -9,7 +9,7 @@
     "swc"
   ],
   "scripts": {
-    "build": "cargo build --target wasm32-unknown-unknown",
+    "build": "cargo build --release --target wasm32-unknown-unknown",
     "test": "cargo test",
     "prepack": "cp -rf target/wasm32-unknown-unknown/release/swc_plugin_component_annotate.wasm ."
   },
