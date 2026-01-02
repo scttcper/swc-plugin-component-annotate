@@ -86,6 +86,8 @@ impl ReactComponentAnnotateVisitor {
                     // Fragments are always transparent containers
                     jsx_fragment.visit_mut_with(self);
                 }
+                #[cfg(swc_ast_unknown)]
+                JSXElementChild::Unknown(..) => panic!("unknown jsx element child"),
                 _ => {}
             }
         }
@@ -101,6 +103,8 @@ impl ReactComponentAnnotateVisitor {
                 JSXElementChild::JSXFragment(jsx_fragment) => {
                     jsx_fragment.visit_mut_with(self);
                 }
+                #[cfg(swc_ast_unknown)]
+                JSXElementChild::Unknown(..) => panic!("unknown jsx element child"),
                 _ => {}
             }
         }
@@ -210,6 +214,8 @@ impl ReactComponentAnnotateVisitor {
             Expr::Paren(paren_expr) => {
                 self.process_return_expression(&mut paren_expr.expr);
             }
+            #[cfg(swc_ast_unknown)]
+            Expr::Unknown(..) => panic!("unknown expr"),
             _ => {}
         }
     }
@@ -223,6 +229,8 @@ impl ReactComponentAnnotateVisitor {
         let callee_name = match call_expr.callee.as_expr() {
             Some(expr) => match expr.as_ref() {
                 Expr::Ident(ident) => ident.sym.as_ref(),
+                #[cfg(swc_ast_unknown)]
+                Expr::Unknown(..) => panic!("unknown expr"),
                 _ => return None,
             },
             _ => return None,
@@ -352,15 +360,22 @@ impl VisitMut for ReactComponentAnnotateVisitor {
                     ImportSpecifier::Named(named_import) => {
                         // Check if the imported name is 'default' or 'styled'
                         let imported_name = match &named_import.imported {
-                            Some(ModuleExportName::Ident(ident)) => ident.sym.as_ref(),
-                            None => named_import.local.sym.as_ref(),
-                            _ => continue,
+                            Some(ModuleExportName::Ident(ident)) => Some(ident.sym.as_ref()),
+                            Some(ModuleExportName::Str(str)) => str.value.as_str(),
+                            None => Some(named_import.local.sym.as_ref()),
+                            #[cfg(swc_ast_unknown)]
+                            Some(_) => panic!("unknown module export name"),
                         };
 
-                        if imported_name == "default" || imported_name == "styled" {
-                            self.styled_import = Some(named_import.local.sym.to_string());
+                        if let Some(imported_name) = imported_name {
+                            if imported_name == "default" || imported_name == "styled" {
+                                self.styled_import = Some(named_import.local.sym.to_string());
+                            }
                         }
                     }
+                    ImportSpecifier::Namespace(_) => {}
+                    #[cfg(swc_ast_unknown)]
+                    ImportSpecifier::Unknown(..) => panic!("unknown import specifier"),
                     _ => {}
                 }
             }
@@ -416,6 +431,11 @@ impl VisitMut for ReactComponentAnnotateVisitor {
                                 // Direct expression return
                                 self.process_return_expression(expr);
                             }
+                            #[cfg(swc_ast_unknown)]
+                            BlockStmtOrExpr::Unknown(..) => {
+                                panic!("unknown block stmt or expr")
+                            }
+                            _ => {}
                         }
 
                         self.current_component_name = None;
@@ -423,6 +443,8 @@ impl VisitMut for ReactComponentAnnotateVisitor {
                     Expr::Fn(func_expr) => {
                         self.find_jsx_in_function_body(&mut func_expr.function, component_name);
                     }
+                    #[cfg(swc_ast_unknown)]
+                    Expr::Unknown(..) => panic!("unknown expr"),
                     _ => {}
                 }
             }
@@ -436,25 +458,33 @@ impl VisitMut for ReactComponentAnnotateVisitor {
 
         // Look for render method
         for member in &mut class_decl.class.body {
-            if let ClassMember::Method(method) = member {
-                if let PropName::Ident(ident) = &method.key {
-                    if ident.sym.as_ref() == "render" {
-                        if let Some(body) = &mut method.function.body {
-                            self.current_component_name = Some(component_name.clone());
+            match member {
+                ClassMember::Method(method) => match &method.key {
+                    PropName::Ident(ident) => {
+                        if ident.sym.as_ref() == "render" {
+                            if let Some(body) = &mut method.function.body {
+                                self.current_component_name = Some(component_name.clone());
 
-                            // Look for return statements
-                            for stmt in &mut body.stmts {
-                                if let Stmt::Return(return_stmt) = stmt {
-                                    if let Some(arg) = &mut return_stmt.arg {
-                                        self.process_return_expression(arg);
+                                // Look for return statements
+                                for stmt in &mut body.stmts {
+                                    if let Stmt::Return(return_stmt) = stmt {
+                                        if let Some(arg) = &mut return_stmt.arg {
+                                            self.process_return_expression(arg);
+                                        }
                                     }
                                 }
-                            }
 
-                            self.current_component_name = None;
+                                self.current_component_name = None;
+                            }
                         }
                     }
-                }
+                    #[cfg(swc_ast_unknown)]
+                    PropName::Unknown(..) => panic!("unknown prop name"),
+                    _ => {}
+                },
+                #[cfg(swc_ast_unknown)]
+                ClassMember::Unknown(..) => panic!("unknown class member"),
+                _ => {}
             }
         }
 
