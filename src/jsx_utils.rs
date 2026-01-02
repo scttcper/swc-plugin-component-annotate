@@ -15,7 +15,9 @@ pub fn is_react_fragment(element: &JSXElementName) -> bool {
             }
             false
         }
-        _ => false,
+        JSXElementName::JSXNamespacedName(_) => false,
+        #[cfg(swc_ast_unknown)]
+        _ => panic!("unknown jsx element name"),
     }
 }
 
@@ -30,6 +32,8 @@ pub fn get_element_name(element: &JSXElementName) -> Cow<str> {
         JSXElementName::JSXNamespacedName(namespaced) => {
             Cow::Owned(format!("{}:{}", namespaced.ns.sym, namespaced.name.sym))
         }
+        #[cfg(swc_ast_unknown)]
+        _ => panic!("unknown jsx element name"),
     }
 }
 
@@ -44,6 +48,8 @@ fn get_member_expression_name(member_expr: &JSXMemberExpr) -> String {
                 member_expr.prop.sym
             );
         }
+        #[cfg(swc_ast_unknown)]
+        _ => panic!("unknown jsx object"),
     };
 
     format!("{}.{}", obj_name, member_expr.prop.sym)
