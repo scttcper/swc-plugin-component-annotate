@@ -375,8 +375,7 @@ impl VisitMut for ReactComponentAnnotateVisitor {
                     }
                     ImportSpecifier::Namespace(_) => {}
                     #[cfg(swc_ast_unknown)]
-                    ImportSpecifier::Unknown(..) => panic!("unknown import specifier"),
-                    _ => {}
+                    _ => panic!("unknown import specifier"),
                 }
             }
         }
@@ -432,10 +431,7 @@ impl VisitMut for ReactComponentAnnotateVisitor {
                                 self.process_return_expression(expr);
                             }
                             #[cfg(swc_ast_unknown)]
-                            BlockStmtOrExpr::Unknown(..) => {
-                                panic!("unknown block stmt or expr")
-                            }
-                            _ => {}
+                            _ => panic!("unknown block stmt or expr"),
                         }
 
                         self.current_component_name = None;
