@@ -298,8 +298,7 @@ impl ReactComponentAnnotateVisitor {
         });
 
         // Build attributes in order: data attributes first, then spread
-        let mut attrs = vec![];
-        attrs.reserve(
+        let mut attrs = Vec::with_capacity(
             2 + usize::from(self.source_file_name.is_some())
                 + usize::from(
                     self.source_path_attr_ident.is_some() && self.source_file_path.is_some(),
