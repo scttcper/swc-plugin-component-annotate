@@ -8,7 +8,7 @@ use jsx_utils::*;
 use path_utils::{extract_absolute_path, extract_filename};
 use rustc_hash::FxHashSet;
 use swc_core::{
-    common::FileName,
+    common::{FileName, DUMMY_SP},
     ecma::{
         ast::*,
         visit::{noop_visit_mut_type, VisitMut, VisitMutWith},
@@ -21,31 +21,55 @@ use swc_core::{
 
 pub struct ReactComponentAnnotateVisitor {
     config: PluginConfig,
-    source_file_name: Option<String>,
-    source_file_path: Option<String>,
+    source_file_name: Option<Str>,
+    source_file_path: Option<Str>,
     current_component_name: Option<String>,
-    ignored_elements: FxHashSet<&'static str>,
+    ignored_elements: &'static FxHashSet<&'static str>,
     ignored_components_set: FxHashSet<String>,
+    component_attr_ident: IdentName,
+    element_attr_ident: IdentName,
+    source_file_attr_ident: IdentName,
+    source_path_attr_ident: Option<IdentName>,
     /// Track the local identifier name for `styled` from @emotion/styled
     styled_import: Option<String>,
 }
 
 impl ReactComponentAnnotateVisitor {
     pub fn new(config: PluginConfig, filename: &FileName) -> Self {
-        let source_file_name = extract_filename(filename);
-        let source_file_path = extract_absolute_path(filename);
+        let source_file_name = extract_filename(filename).map(|value| Str {
+            span: DUMMY_SP,
+            value: value.into(),
+            raw: None,
+        });
+        let source_file_path = extract_absolute_path(filename).map(|value| Str {
+            span: DUMMY_SP,
+            value: value.into(),
+            raw: None,
+        });
 
         // Pre-compute ignored components set for O(1) lookups
         let ignored_components_set: FxHashSet<String> =
             config.ignored_components.iter().cloned().collect();
+        let component_attr_ident = IdentName::new(config.component_attr_name().into(), DUMMY_SP);
+        let element_attr_ident = IdentName::new(config.element_attr_name().into(), DUMMY_SP);
+        let source_file_attr_ident =
+            IdentName::new(config.source_file_attr_name().into(), DUMMY_SP);
+        let source_path_attr_ident = config
+            .source_path_attr
+            .as_ref()
+            .map(|_| IdentName::new(config.source_path_attr_name().into(), DUMMY_SP));
 
         Self {
+            component_attr_ident,
             config,
-            source_file_name,
-            source_file_path,
-            current_component_name: None,
+            element_attr_ident,
             ignored_elements: constants::default_ignored_elements(),
             ignored_components_set,
+            source_file_name,
+            source_file_attr_ident,
+            source_file_path,
+            source_path_attr_ident,
+            current_component_name: None,
             styled_import: None,
         }
     }
@@ -113,11 +137,6 @@ impl ReactComponentAnnotateVisitor {
     fn add_attributes_to_element(&self, opening_element: &mut JSXOpeningElement) {
         let element_name = get_element_name(&opening_element.name);
 
-        // Skip React fragments
-        if is_react_fragment(&opening_element.name) {
-            return;
-        }
-
         // Check if component should be ignored
         if let Some(ref component_name) = self.current_component_name {
             if self.should_ignore_component(component_name) {
@@ -125,58 +144,71 @@ impl ReactComponentAnnotateVisitor {
             }
         }
 
-        // Check if element should be ignored
         if self.should_ignore_component(&element_name) {
             return;
         }
 
         let is_ignored_html = self.should_ignore_element(&element_name);
-
-        // Add element attribute (for non-HTML elements or when component name differs)
-        if !is_ignored_html
+        let add_element_attr = !is_ignored_html
             && !has_attribute(opening_element, self.config.element_attr_name())
             && (self.config.component_attr_name() != self.config.element_attr_name()
-                || self.current_component_name.is_none())
-        {
-            opening_element.attrs.push(create_jsx_attr(
-                self.config.element_attr_name(),
+                || self.current_component_name.is_none());
+        let add_component_attr = self.current_component_name.is_some()
+            && !has_attribute(opening_element, self.config.component_attr_name());
+        let add_source_file_attr = self.source_file_name.is_some()
+            && (self.current_component_name.is_some() || !is_ignored_html)
+            && !has_attribute(opening_element, self.config.source_file_attr_name());
+        let add_source_path_attr = self.source_file_path.is_some()
+            && self.source_path_attr_ident.is_some()
+            && (self.current_component_name.is_some() || !is_ignored_html)
+            && !has_attribute(opening_element, self.config.source_path_attr_name());
+
+        let attr_count = usize::from(add_element_attr)
+            + usize::from(add_component_attr)
+            + usize::from(add_source_file_attr)
+            + usize::from(add_source_path_attr);
+
+        if attr_count > 0 {
+            opening_element.attrs.reserve(attr_count);
+        }
+
+        if add_element_attr {
+            opening_element.attrs.push(create_jsx_attr_with_ident(
+                &self.element_attr_ident,
                 &element_name,
             ));
         }
 
-        // Add component attribute (only for root elements)
-        if let Some(ref component_name) = self.current_component_name {
-            if !has_attribute(opening_element, self.config.component_attr_name()) {
-                opening_element.attrs.push(create_jsx_attr(
-                    self.config.component_attr_name(),
+        if add_component_attr {
+            if let Some(ref component_name) = self.current_component_name {
+                opening_element.attrs.push(create_jsx_attr_with_ident(
+                    &self.component_attr_ident,
                     component_name,
                 ));
             }
         }
 
-        // Add source file attribute
-        if let Some(ref source_file) = self.source_file_name {
-            if (self.current_component_name.is_some() || !is_ignored_html)
-                && !has_attribute(opening_element, self.config.source_file_attr_name())
-            {
-                opening_element.attrs.push(create_jsx_attr(
-                    self.config.source_file_attr_name(),
-                    source_file,
-                ));
+        if add_source_file_attr {
+            if let Some(ref source_file) = self.source_file_name {
+                opening_element
+                    .attrs
+                    .push(create_jsx_attr_with_ident_and_str(
+                        &self.source_file_attr_ident,
+                        source_file,
+                    ));
             }
         }
 
-        // Add source path attribute (only if explicitly configured)
-        if self.config.source_path_attr.is_some() {
-            if let Some(ref source_path) = self.source_file_path {
-                if (self.current_component_name.is_some() || !is_ignored_html)
-                    && !has_attribute(opening_element, self.config.source_path_attr_name())
-                {
-                    opening_element.attrs.push(create_jsx_attr(
-                        self.config.source_path_attr_name(),
+        if add_source_path_attr {
+            if let (Some(ref source_path), Some(ref source_path_attr_ident)) =
+                (&self.source_file_path, &self.source_path_attr_ident)
+            {
+                opening_element
+                    .attrs
+                    .push(create_jsx_attr_with_ident_and_str(
+                        source_path_attr_ident,
                         source_path,
                     ));
-                }
             }
         }
     }
@@ -267,6 +299,12 @@ impl ReactComponentAnnotateVisitor {
 
         // Build attributes in order: data attributes first, then spread
         let mut attrs = vec![];
+        attrs.reserve(
+            2 + usize::from(self.source_file_name.is_some())
+                + usize::from(
+                    self.source_path_attr_ident.is_some() && self.source_file_path.is_some(),
+                ),
+        );
 
         // Add data-element attribute using the styled component variable name
         attrs.push(create_jsx_attr(
@@ -276,20 +314,20 @@ impl ReactComponentAnnotateVisitor {
 
         // Add data-source-file attribute
         if let Some(ref source_file) = self.source_file_name {
-            attrs.push(create_jsx_attr(
-                self.config.source_file_attr_name(),
+            attrs.push(create_jsx_attr_with_ident_and_str(
+                &self.source_file_attr_ident,
                 source_file,
             ));
         }
 
         // Add data-source-path attribute (only if explicitly configured)
-        if self.config.source_path_attr.is_some() {
-            if let Some(ref source_path) = self.source_file_path {
-                attrs.push(create_jsx_attr(
-                    self.config.source_path_attr_name(),
-                    source_path,
-                ));
-            }
+        if let (Some(ref source_path), Some(ref source_path_attr_ident)) =
+            (&self.source_file_path, &self.source_path_attr_ident)
+        {
+            attrs.push(create_jsx_attr_with_ident_and_str(
+                source_path_attr_ident,
+                source_path,
+            ));
         }
 
         // Add spread attribute AFTER data attributes: {...props}
