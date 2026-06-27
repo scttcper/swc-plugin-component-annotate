@@ -24,9 +24,9 @@ const MemberExpressionComponent = ()=>{
 
       { /* React.Fragment member expression */ }
       <React.Fragment>
-        <h1>Inside React.Fragment</h1>
-        <p>This should not be annotated</p>
+        <h1 data-component="MemberExpressionComponent" data-source-file="test.jsx">Inside React.Fragment</h1>
+        <p data-component="MemberExpressionComponent" data-source-file="test.jsx">This should not be annotated</p>
       </React.Fragment>
     </div>;
 };
-export default MemberExpressionComponent; 
+export default MemberExpressionComponent;

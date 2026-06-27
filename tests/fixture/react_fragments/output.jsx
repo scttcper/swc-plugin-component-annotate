@@ -2,13 +2,13 @@ import React, { Fragment } from 'react';
 const MyComponent = ()=>{
     return <div data-component="MyComponent" data-source-file="test.jsx">
       <React.Fragment>
-        <h1>Using React.Fragment</h1>
-        <p>This is inside React.Fragment</p>
+        <h1 data-component="MyComponent" data-source-file="test.jsx">Using React.Fragment</h1>
+        <p data-component="MyComponent" data-source-file="test.jsx">This is inside React.Fragment</p>
       </React.Fragment>
       
       <Fragment>
-        <h2>Using Fragment</h2>
-        <span>This is inside Fragment</span>
+        <h2 data-component="MyComponent" data-source-file="test.jsx">Using Fragment</h2>
+        <span data-component="MyComponent" data-source-file="test.jsx">This is inside Fragment</span>
       </Fragment>
       
       <>
@@ -28,27 +28,27 @@ const EdgeCasesComponent = ()=>{
       { /* Nested fragments */ }
       <Fragment>
         <Fragment>
-          <h1>Nested Fragment content</h1>
+          <h1 data-component="EdgeCasesComponent" data-source-file="test.jsx">Nested Fragment content</h1>
         </Fragment>
       </Fragment>
       
       { /* Mixed fragment types */ }
       <React.Fragment>
         <>
-          <h2>Mixed fragment types</h2>
+          <h2 data-component="EdgeCasesComponent" data-source-file="test.jsx">Mixed fragment types</h2>
         </>
       </React.Fragment>
       
       { /* Conditional fragments */ }
       {true ? <Fragment>
-          <h3>Conditional fragment</h3>
+          <h3 data-component="EdgeCasesComponent" data-source-file="test.jsx">Conditional fragment</h3>
         </Fragment> : <>
-          <h4>Alternative fragment</h4>
+          <h4 data-component="EdgeCasesComponent" data-source-file="test.jsx">Alternative fragment</h4>
         </>}
       
       { /* Fragment with single child */ }
       <Fragment>
-        <p>Single child in Fragment</p>
+        <p data-component="EdgeCasesComponent" data-source-file="test.jsx">Single child in Fragment</p>
       </Fragment>
       
       { /* Empty tag with single child */ }
@@ -59,8 +59,8 @@ const EdgeCasesComponent = ()=>{
 };
 const ConditionalComponent = ()=>{
     return <>
-      {true && <div>Conditional content</div>}
-      {false || <span>Alternative content</span>}
+      {true && <div data-component="ConditionalComponent" data-source-file="test.jsx">Conditional content</div>}
+      {false || <span data-component="ConditionalComponent" data-source-file="test.jsx">Alternative content</span>}
     </>;
 };
-export default MyComponent; 
+export default MyComponent;
