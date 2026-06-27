@@ -6,6 +6,9 @@ on:
       - main
   pull_request:
 
+permissions:
+  contents: read
+
 env:
   CARGO_INCREMENTAL: 0
   CARGO_PROFILE_RELEASE_LTO: "fat"
@@ -16,11 +19,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       # https://github.com/actions/checkout
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
-      # https://github.com/wyvox/action-setup-pnpm
-      - uses: wyvox/action-setup-pnpm@v3
-        with: { node-version: 24 }
+      # https://github.com/pnpm/action-setup
+      - uses: pnpm/action-setup@v6
+
+      # https://github.com/actions/setup-node
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          package-manager-cache: false
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -28,7 +36,7 @@ jobs:
           targets: wasm32-unknown-unknown
 
       - name: Cache Cargo
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
