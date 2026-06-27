@@ -49,14 +49,44 @@ fn get_member_expression_name(member_expr: &JSXMemberExpr) -> String {
     output
 }
 
-/// Check if a JSX element already has an attribute with the given name
-#[inline]
-pub fn has_attribute(element: &JSXOpeningElement, attr_name: &str) -> bool {
-    element.attrs.iter().any(|attr| {
-        matches!(attr, JSXAttrOrSpread::JSXAttr(jsx_attr)
-            if matches!(&jsx_attr.name, JSXAttrName::Ident(ident)
-                if ident.sym.as_ref() == attr_name))
-    })
+#[derive(Default)]
+pub struct AttributePresence {
+    pub component: bool,
+    pub element: bool,
+    pub source_file: bool,
+    pub source_path: bool,
+}
+
+pub fn attribute_presence(
+    element: &JSXOpeningElement,
+    component_attr: &IdentName,
+    element_attr: &IdentName,
+    source_file_attr: &IdentName,
+    source_path_attr: Option<&IdentName>,
+) -> AttributePresence {
+    let mut presence = AttributePresence::default();
+
+    for attr in &element.attrs {
+        let JSXAttrOrSpread::JSXAttr(jsx_attr) = attr else {
+            continue;
+        };
+        let JSXAttrName::Ident(ident) = &jsx_attr.name else {
+            continue;
+        };
+
+        if ident.sym == component_attr.sym {
+            presence.component = true;
+        } else if ident.sym == element_attr.sym {
+            presence.element = true;
+        } else if ident.sym == source_file_attr.sym {
+            presence.source_file = true;
+        } else if source_path_attr.is_some_and(|source_path_attr| ident.sym == source_path_attr.sym)
+        {
+            presence.source_path = true;
+        }
+    }
+
+    presence
 }
 
 /// Create a JSX attribute with a string value

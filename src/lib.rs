@@ -1,12 +1,19 @@
 pub mod config;
 mod constants;
+mod jsx_scope;
 mod jsx_utils;
 pub mod path_utils;
+mod styled;
 
 use config::PluginConfig;
+use jsx_scope::{
+    collect_function_param_scope, collect_pat_identifiers_with_status, collect_pat_list_scope,
+    JsxBindingTracker, JsxIdentifierStatus,
+};
 use jsx_utils::*;
 use path_utils::{extract_absolute_path, extract_filename};
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashSet;
+use styled::{styled_call_component_ref, transform_styled_call, StyledTransformAttrs};
 use swc_core::{
     common::{FileName, DUMMY_SP},
     ecma::{
@@ -20,29 +27,24 @@ use swc_core::{
     },
 };
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum JsxIdentifierStatus {
-    Annotatable,
-    Unannotatable,
-}
-
 pub struct ReactComponentAnnotateVisitor {
     config: PluginConfig,
     source_file_name: Option<Str>,
     source_file_path: Option<Str>,
-    current_component_name: Option<String>,
+    current_component_name: Option<Atom>,
+    fragment_child_component_name: Option<Atom>,
+    current_return_component_name: Option<Atom>,
     ignored_elements: &'static FxHashSet<&'static str>,
     ignored_components_set: FxHashSet<String>,
-    // JSX identifiers that may render React.Fragment cannot receive custom props.
-    jsx_identifier_scopes: Vec<FxHashMap<Atom, JsxIdentifierStatus>>,
-    fragment_component_identifiers: FxHashSet<Atom>,
-    react_namespace_identifiers: FxHashSet<Atom>,
+    jsx_bindings: JsxBindingTracker,
+    fragment_component_identifiers: FxHashSet<Id>,
+    react_namespace_identifiers: FxHashSet<Id>,
     component_attr_ident: IdentName,
     element_attr_ident: IdentName,
     source_file_attr_ident: IdentName,
     source_path_attr_ident: Option<IdentName>,
     /// Track the local identifier name for `styled` from @emotion/styled
-    styled_import: Option<String>,
+    styled_import: Option<Id>,
 }
 
 impl ReactComponentAnnotateVisitor {
@@ -69,25 +71,22 @@ impl ReactComponentAnnotateVisitor {
             .source_path_attr
             .as_ref()
             .map(|_| IdentName::new(config.source_path_attr_name().into(), DUMMY_SP));
-        let mut fragment_component_identifiers = FxHashSet::default();
-        fragment_component_identifiers.insert("Fragment".into());
-        let mut react_namespace_identifiers = FxHashSet::default();
-        react_namespace_identifiers.insert("React".into());
-
         Self {
             component_attr_ident,
             config,
             element_attr_ident,
             ignored_elements: constants::default_ignored_elements(),
             ignored_components_set,
-            jsx_identifier_scopes: Vec::new(),
-            fragment_component_identifiers,
-            react_namespace_identifiers,
+            jsx_bindings: JsxBindingTracker::new(),
+            fragment_component_identifiers: FxHashSet::default(),
+            react_namespace_identifiers: FxHashSet::default(),
             source_file_name,
             source_file_attr_ident,
             source_file_path,
             source_path_attr_ident,
             current_component_name: None,
+            fragment_child_component_name: None,
+            current_return_component_name: None,
             styled_import: None,
         }
     }
@@ -103,32 +102,39 @@ impl ReactComponentAnnotateVisitor {
     }
 
     #[inline]
-    fn is_unannotatable_identifier(&self, ident: &Atom) -> bool {
-        match self.scoped_jsx_identifier_status(ident) {
+    fn is_unannotatable_identifier(&self, ident: &Ident) -> bool {
+        let id = ident.to_id();
+
+        match self.scoped_jsx_identifier_status(&id) {
             Some(JsxIdentifierStatus::Annotatable) => false,
             Some(JsxIdentifierStatus::Unannotatable) => true,
-            None => self.fragment_component_identifiers.contains(ident),
+            None => {
+                self.fragment_component_identifiers.contains(&id)
+                    || ident.sym.as_ref() == "Fragment"
+            }
         }
     }
 
     #[inline]
-    fn scoped_jsx_identifier_status(&self, ident: &Atom) -> Option<JsxIdentifierStatus> {
-        self.jsx_identifier_scopes
-            .iter()
-            .rev()
-            .find_map(|scope| scope.get(ident).copied())
+    fn scoped_jsx_identifier_status(&self, id: &Id) -> Option<JsxIdentifierStatus> {
+        self.jsx_bindings.status(id)
     }
 
     #[inline]
-    fn is_global_fragment_identifier(&self, ident: &Atom) -> bool {
-        self.scoped_jsx_identifier_status(ident).is_none()
-            && self.fragment_component_identifiers.contains(ident)
+    fn is_global_fragment_identifier(&self, ident: &Ident) -> bool {
+        let id = ident.to_id();
+
+        self.scoped_jsx_identifier_status(&id).is_none()
+            && (self.fragment_component_identifiers.contains(&id)
+                || ident.sym.as_ref() == "Fragment")
     }
 
     #[inline]
-    fn is_global_react_namespace_identifier(&self, ident: &Atom) -> bool {
-        self.scoped_jsx_identifier_status(ident).is_none()
-            && self.react_namespace_identifiers.contains(ident)
+    fn is_global_react_namespace_identifier(&self, ident: &Ident) -> bool {
+        let id = ident.to_id();
+
+        self.scoped_jsx_identifier_status(&id).is_none()
+            && (self.react_namespace_identifiers.contains(&id) || ident.sym.as_ref() == "React")
     }
 
     #[inline]
@@ -137,17 +143,17 @@ impl ReactComponentAnnotateVisitor {
             return false;
         };
 
-        self.is_unannotatable_identifier(&ident.sym)
+        self.is_unannotatable_identifier(ident)
     }
 
     #[inline]
     fn is_react_fragment_element_name(&self, element_name: &JSXElementName) -> bool {
         match element_name {
-            JSXElementName::Ident(ident) => self.is_global_fragment_identifier(&ident.sym),
+            JSXElementName::Ident(ident) => self.is_global_fragment_identifier(ident),
             JSXElementName::JSXMemberExpr(member_expr) => matches!(
                 &member_expr.obj,
                 JSXObject::Ident(obj)
-                    if self.is_global_react_namespace_identifier(&obj.sym)
+                    if self.is_global_react_namespace_identifier(obj)
                         && member_expr.prop.sym.as_ref() == "Fragment"
             ),
             JSXElementName::JSXNamespacedName(_) => false,
@@ -158,7 +164,7 @@ impl ReactComponentAnnotateVisitor {
 
     fn expr_may_resolve_to_fragment(&self, expr: &Expr) -> bool {
         match expr {
-            Expr::Ident(ident) => self.is_unannotatable_identifier(&ident.sym),
+            Expr::Ident(ident) => self.is_unannotatable_identifier(ident),
             Expr::Member(member_expr) => {
                 let prop_is_fragment = matches!(
                     &member_expr.prop,
@@ -168,7 +174,7 @@ impl ReactComponentAnnotateVisitor {
                     && matches!(
                         member_expr.obj.as_ref(),
                         Expr::Ident(obj)
-                            if self.is_global_react_namespace_identifier(&obj.sym)
+                            if self.is_global_react_namespace_identifier(obj)
                     )
             }
             Expr::Cond(cond_expr) => {
@@ -196,11 +202,11 @@ impl ReactComponentAnnotateVisitor {
             match specifier {
                 ImportSpecifier::Default(default_import) => {
                     self.react_namespace_identifiers
-                        .insert(default_import.local.sym.clone());
+                        .insert(default_import.local.to_id());
                 }
                 ImportSpecifier::Namespace(namespace_import) => {
                     self.react_namespace_identifiers
-                        .insert(namespace_import.local.sym.clone());
+                        .insert(namespace_import.local.to_id());
                 }
                 ImportSpecifier::Named(named_import) => {
                     let imported_name = match &named_import.imported {
@@ -213,7 +219,7 @@ impl ReactComponentAnnotateVisitor {
 
                     if imported_name == Some("Fragment") {
                         self.fragment_component_identifiers
-                            .insert(named_import.local.sym.clone());
+                            .insert(named_import.local.to_id());
                     }
                 }
                 #[cfg(swc_ast_unknown)]
@@ -222,25 +228,177 @@ impl ReactComponentAnnotateVisitor {
         }
     }
 
-    fn register_jsx_identifier(&mut self, identifier: Atom, status: JsxIdentifierStatus) {
-        let should_insert = status == JsxIdentifierStatus::Unannotatable
-            || self.should_track_annotatable_identifier(&identifier);
-        if !should_insert {
-            return;
-        }
-
-        if let Some(scope) = self.jsx_identifier_scopes.last_mut() {
-            scope.insert(identifier, status);
-        } else if status == JsxIdentifierStatus::Unannotatable {
-            self.fragment_component_identifiers.insert(identifier);
+    fn register_decl_bindings(&mut self, decl: &Decl) {
+        match decl {
+            Decl::Class(class_decl) => {
+                self.jsx_bindings
+                    .insert(class_decl.ident.to_id(), JsxIdentifierStatus::Annotatable);
+            }
+            Decl::Fn(fn_decl) => {
+                self.jsx_bindings
+                    .insert(fn_decl.ident.to_id(), JsxIdentifierStatus::Annotatable);
+            }
+            Decl::Var(var_decl) => {
+                self.register_var_decl_bindings(var_decl);
+            }
+            #[cfg(swc_ast_unknown)]
+            Decl::Unknown(..) => panic!("unknown declaration"),
+            _ => {}
         }
     }
 
-    #[inline]
-    fn should_track_annotatable_identifier(&self, identifier: &Atom) -> bool {
-        self.scoped_jsx_identifier_status(identifier).is_some()
-            || self.fragment_component_identifiers.contains(identifier)
-            || self.react_namespace_identifiers.contains(identifier)
+    fn register_var_decl_bindings(&mut self, var_decl: &VarDecl) {
+        for declarator in &var_decl.decls {
+            self.register_var_declarator_binding_with_kind(declarator, var_decl.kind);
+        }
+    }
+
+    fn register_var_declarator_binding_with_kind(
+        &mut self,
+        declarator: &VarDeclarator,
+        kind: VarDeclKind,
+    ) {
+        let status = if declarator
+            .init
+            .as_deref()
+            .is_some_and(|init| self.expr_may_resolve_to_fragment(init))
+        {
+            JsxIdentifierStatus::Unannotatable
+        } else {
+            JsxIdentifierStatus::Annotatable
+        };
+        let is_var = kind == VarDeclKind::Var;
+
+        collect_pat_identifiers_with_status(&declarator.name, status, &mut |ident, status| {
+            if is_var {
+                self.jsx_bindings.insert_var(ident.to_id(), status);
+            } else {
+                self.jsx_bindings.insert(ident.to_id(), status);
+            }
+        });
+    }
+
+    fn visit_var_declarator(&mut self, var_declarator: &mut VarDeclarator) {
+        let component_name = match &var_declarator.name {
+            Pat::Ident(ident) => Some(ident.id.sym.clone()),
+            _ => None,
+        };
+
+        var_declarator.name.visit_mut_with(self);
+
+        if let Some(init) = &mut var_declarator.init {
+            match init.as_mut() {
+                Expr::Call(call_expr) => {
+                    if self.config.experimental_rewrite_emotion_styled {
+                        if let (Some(component_name), Some(ref_component_name)) = (
+                            component_name.as_ref(),
+                            styled_call_component_ref(call_expr, self.styled_import.as_ref()),
+                        ) {
+                            transform_styled_call(
+                                call_expr,
+                                ref_component_name,
+                                component_name.clone(),
+                                StyledTransformAttrs {
+                                    element_attr_name: self.config.element_attr_name(),
+                                    source_file: self.source_file_name.as_ref(),
+                                    source_file_attr_ident: &self.source_file_attr_ident,
+                                    source_path: self.source_file_path.as_ref(),
+                                    source_path_attr_ident: self.source_path_attr_ident.as_ref(),
+                                },
+                            );
+                        }
+                    }
+                    init.visit_mut_with(self);
+                }
+                Expr::Arrow(arrow_func) => {
+                    if let Some(component_name) = component_name {
+                        self.visit_arrow_as_component(arrow_func, component_name);
+                    } else {
+                        init.visit_mut_with(self);
+                    }
+                }
+                Expr::Fn(func_expr) => {
+                    if let Some(component_name) = component_name {
+                        self.visit_function_as_component(&mut func_expr.function, component_name);
+                    } else {
+                        init.visit_mut_with(self);
+                    }
+                }
+                #[cfg(swc_ast_unknown)]
+                Expr::Unknown(..) => panic!("unknown expr"),
+                _ => init.visit_mut_with(self),
+            }
+        }
+    }
+
+    fn visit_var_decl(&mut self, var_decl: &mut VarDecl, register_bindings: bool) {
+        if register_bindings {
+            self.register_var_decl_bindings(var_decl);
+        }
+
+        for declarator in &mut var_decl.decls {
+            self.visit_var_declarator(declarator);
+        }
+    }
+
+    fn visit_predeclared_stmt(&mut self, stmt: &mut Stmt) {
+        match stmt {
+            Stmt::Decl(Decl::Var(var_decl)) => {
+                self.visit_var_decl(var_decl, false);
+            }
+            #[cfg(swc_ast_unknown)]
+            Stmt::Unknown(..) => panic!("unknown statement"),
+            _ => stmt.visit_mut_with(self),
+        }
+    }
+
+    fn visit_predeclared_module_item(&mut self, item: &mut ModuleItem) {
+        match item {
+            ModuleItem::ModuleDecl(ModuleDecl::ExportDecl(export_decl)) => {
+                match &mut export_decl.decl {
+                    Decl::Var(var_decl) => {
+                        self.visit_var_decl(var_decl, false);
+                    }
+                    #[cfg(swc_ast_unknown)]
+                    Decl::Unknown(..) => panic!("unknown declaration"),
+                    _ => item.visit_mut_with(self),
+                }
+            }
+            ModuleItem::Stmt(stmt) => {
+                self.visit_predeclared_stmt(stmt);
+            }
+            #[cfg(swc_ast_unknown)]
+            ModuleItem::Unknown(..) => panic!("unknown module item"),
+            _ => item.visit_mut_with(self),
+        }
+    }
+
+    fn register_module_item_bindings(&mut self, item: &ModuleItem) {
+        match item {
+            ModuleItem::ModuleDecl(ModuleDecl::Import(import_decl)) => {
+                self.register_react_imports(import_decl);
+            }
+            ModuleItem::ModuleDecl(ModuleDecl::ExportDecl(export_decl)) => {
+                self.register_decl_bindings(&export_decl.decl);
+            }
+            ModuleItem::Stmt(Stmt::Decl(decl)) => {
+                self.register_decl_bindings(decl);
+            }
+            #[cfg(swc_ast_unknown)]
+            ModuleItem::Unknown(..) => panic!("unknown module item"),
+            _ => {}
+        }
+    }
+
+    fn register_script_stmt_bindings(&mut self, stmt: &Stmt) {
+        match stmt {
+            Stmt::Decl(decl) => {
+                self.register_decl_bindings(decl);
+            }
+            #[cfg(swc_ast_unknown)]
+            Stmt::Unknown(..) => panic!("unknown statement"),
+            _ => {}
+        }
     }
 
     fn process_jsx_element(&mut self, element: &mut JSXElement) {
@@ -251,46 +409,45 @@ impl ReactComponentAnnotateVisitor {
             self.add_attributes_to_element(&mut element.opening);
         }
 
-        // Process children - fragments are transparent containers
-        for child in &mut element.children {
-            match child {
-                JSXElementChild::JSXElement(jsx_element) => {
-                    if is_fragment {
-                        // Fragment children are processed without clearing component name
-                        jsx_element.visit_mut_with(self);
-                    } else {
-                        // Non-fragment children don't get component name, only element name
-                        let prev_component = self.current_component_name.take();
-                        jsx_element.visit_mut_with(self);
-                        self.current_component_name = prev_component;
-                    }
-                }
-                JSXElementChild::JSXFragment(jsx_fragment) => {
-                    // Fragments are always transparent containers
-                    jsx_fragment.visit_mut_with(self);
-                }
-                #[cfg(swc_ast_unknown)]
-                JSXElementChild::Unknown(..) => panic!("unknown jsx element child"),
-                _ => {}
-            }
+        if is_fragment {
+            self.visit_fragment_jsx_children(element);
+        } else {
+            self.visit_element_jsx_children(element);
         }
     }
 
     fn process_jsx_fragment(&mut self, fragment: &mut JSXFragment) {
-        // Fragments are transparent containers - just process children
-        for child in &mut fragment.children {
-            match child {
-                JSXElementChild::JSXElement(jsx_element) => {
-                    jsx_element.visit_mut_with(self);
-                }
-                JSXElementChild::JSXFragment(jsx_fragment) => {
-                    jsx_fragment.visit_mut_with(self);
-                }
-                #[cfg(swc_ast_unknown)]
-                JSXElementChild::Unknown(..) => panic!("unknown jsx element child"),
-                _ => {}
-            }
+        self.visit_fragment_jsx_children(fragment);
+    }
+
+    fn visit_fragment_jsx_children<N>(&mut self, node: &mut N)
+    where
+        N: VisitMutWith<Self>,
+    {
+        let prev_component = self.current_component_name.clone();
+        if self.current_component_name.is_none() {
+            self.current_component_name = self.fragment_child_component_name.clone();
         }
+
+        node.visit_mut_children_with(self);
+        self.current_component_name = prev_component;
+    }
+
+    fn visit_element_jsx_children<N>(&mut self, node: &mut N)
+    where
+        N: VisitMutWith<Self>,
+    {
+        let prev_component = self.current_component_name.take();
+        let prev_fragment_child_component = self.fragment_child_component_name.clone();
+
+        if self.fragment_child_component_name.is_none() {
+            self.fragment_child_component_name = prev_component.clone();
+        }
+
+        node.visit_mut_children_with(self);
+
+        self.current_component_name = prev_component;
+        self.fragment_child_component_name = prev_fragment_child_component;
     }
 
     fn add_attributes_to_element(&self, opening_element: &mut JSXOpeningElement) {
@@ -302,7 +459,7 @@ impl ReactComponentAnnotateVisitor {
 
         // Check if component should be ignored
         if let Some(ref component_name) = self.current_component_name {
-            if self.should_ignore_component(component_name) {
+            if self.should_ignore_component(component_name.as_ref()) {
                 return;
             }
         }
@@ -312,19 +469,25 @@ impl ReactComponentAnnotateVisitor {
         }
 
         let is_ignored_html = self.should_ignore_element(&element_name);
+        let existing_attrs = attribute_presence(
+            opening_element,
+            &self.component_attr_ident,
+            &self.element_attr_ident,
+            &self.source_file_attr_ident,
+            self.source_path_attr_ident.as_ref(),
+        );
         let add_element_attr = !is_ignored_html
-            && !has_attribute(opening_element, self.config.element_attr_name())
+            && !existing_attrs.element
             && (self.config.component_attr_name() != self.config.element_attr_name()
                 || self.current_component_name.is_none());
-        let add_component_attr = self.current_component_name.is_some()
-            && !has_attribute(opening_element, self.config.component_attr_name());
+        let add_component_attr = self.current_component_name.is_some() && !existing_attrs.component;
         let add_source_file_attr = self.source_file_name.is_some()
             && (self.current_component_name.is_some() || !is_ignored_html)
-            && !has_attribute(opening_element, self.config.source_file_attr_name());
+            && !existing_attrs.source_file;
         let add_source_path_attr = self.source_file_path.is_some()
             && self.source_path_attr_ident.is_some()
             && (self.current_component_name.is_some() || !is_ignored_html)
-            && !has_attribute(opening_element, self.config.source_path_attr_name());
+            && !existing_attrs.source_path;
 
         let attr_count = usize::from(add_element_attr)
             + usize::from(add_component_attr)
@@ -346,7 +509,7 @@ impl ReactComponentAnnotateVisitor {
             if let Some(ref component_name) = self.current_component_name {
                 opening_element.attrs.push(create_jsx_attr_with_ident(
                     &self.component_attr_ident,
-                    component_name,
+                    component_name.as_ref(),
                 ));
             }
         }
@@ -376,283 +539,83 @@ impl ReactComponentAnnotateVisitor {
         }
     }
 
-    fn find_jsx_in_function_body(&mut self, func: &mut Function, component_name: String) {
-        if let Some(body) = &mut func.body {
-            self.current_component_name = Some(component_name);
-            self.jsx_identifier_scopes
-                .push(collect_function_param_scope(&func.params));
+    fn visit_function_as_component(&mut self, func: &mut Function, component_name: Atom) {
+        let prev_return_component = self.current_return_component_name.replace(component_name);
+        let prev_component = self.current_component_name.take();
+        let prev_fragment_child_component = self.fragment_child_component_name.take();
 
-            // Register aliases before processing returns so `<Provider />` can be skipped
-            // when `Provider` may resolve to Fragment.
-            for stmt in &body.stmts {
-                self.register_fragment_aliases_in_stmt(stmt);
-            }
+        self.jsx_bindings
+            .push_function_with(collect_function_param_scope(&func.params));
+        func.visit_mut_children_with(self);
+        self.jsx_bindings.pop();
 
-            // Look for return statements
-            for stmt in &mut body.stmts {
-                if let Stmt::Return(return_stmt) = stmt {
-                    if let Some(arg) = &mut return_stmt.arg {
-                        self.process_return_expression(arg);
-                    }
-                }
-            }
-
-            self.jsx_identifier_scopes.pop();
-            self.current_component_name = None;
-        }
+        self.current_return_component_name = prev_return_component;
+        self.current_component_name = prev_component;
+        self.fragment_child_component_name = prev_fragment_child_component;
     }
 
-    fn process_return_expression(&mut self, expr: &mut Expr) {
-        match expr {
-            Expr::JSXElement(jsx_element) => {
-                jsx_element.visit_mut_with(self);
+    fn visit_arrow_as_component(&mut self, arrow_expr: &mut ArrowExpr, component_name: Atom) {
+        let prev_return_component = self.current_return_component_name.replace(component_name);
+        let prev_component = self.current_component_name.take();
+        let prev_fragment_child_component = self.fragment_child_component_name.take();
+
+        self.jsx_bindings
+            .push_function_with(collect_pat_list_scope(&arrow_expr.params));
+        match arrow_expr.body.as_mut() {
+            BlockStmtOrExpr::BlockStmt(block) => {
+                block.visit_mut_with(self);
             }
-            Expr::JSXFragment(jsx_fragment) => {
-                jsx_fragment.visit_mut_with(self);
-            }
-            Expr::Cond(cond_expr) => {
-                // Handle ternary expressions
-                self.process_return_expression(&mut cond_expr.cons);
-                self.process_return_expression(&mut cond_expr.alt);
-            }
-            Expr::Paren(paren_expr) => {
-                self.process_return_expression(&mut paren_expr.expr);
+            BlockStmtOrExpr::Expr(expr) => {
+                self.visit_component_return_expr(expr);
             }
             #[cfg(swc_ast_unknown)]
-            Expr::Unknown(..) => panic!("unknown expr"),
-            _ => {}
+            _ => panic!("unknown block stmt or expr"),
         }
+        self.jsx_bindings.pop();
+
+        self.current_return_component_name = prev_return_component;
+        self.current_component_name = prev_component;
+        self.fragment_child_component_name = prev_fragment_child_component;
     }
 
-    /// Check if a call expression matches styled(ComponentRef) pattern
-    fn is_styled_call_with_component_ref(&self, call_expr: &CallExpr) -> Option<String> {
-        // Check if we have a tracked styled import
-        let styled_name = self.styled_import.as_ref()?;
-
-        // Check if the callee is the styled identifier
-        let callee_name = match call_expr.callee.as_expr() {
-            Some(expr) => match expr.as_ref() {
-                Expr::Ident(ident) => ident.sym.as_ref(),
-                #[cfg(swc_ast_unknown)]
-                Expr::Unknown(..) => panic!("unknown expr"),
-                _ => return None,
-            },
-            _ => return None,
+    fn visit_component_return_expr(&mut self, expr: &mut Expr) {
+        let Some(component_name) = self.current_return_component_name.clone() else {
+            expr.visit_mut_with(self);
+            return;
         };
 
-        if callee_name != styled_name {
-            return None;
-        }
+        let prev_component = self.current_component_name.replace(component_name);
+        let prev_fragment_child_component = self.fragment_child_component_name.take();
 
-        // Check if the first argument is an identifier (component reference)
-        if let Some(ExprOrSpread { spread: None, expr }) = call_expr.args.first() {
-            if let Expr::Ident(ident) = expr.as_ref() {
-                return Some(ident.sym.to_string());
-            }
-        }
+        expr.visit_mut_with(self);
 
-        None
-    }
-
-    /// Transform styled(ComponentRef) to styled(props => <ComponentRef data-element="..." {...props} />)
-    fn transform_styled_call(
-        &self,
-        call_expr: &mut CallExpr,
-        ref_component_name: String,
-        styled_component_name: String,
-    ) {
-        use swc_core::common::{SyntaxContext, DUMMY_SP};
-
-        // Create the props parameter: props
-        let props_param = Pat::Ident(BindingIdent {
-            id: Ident::new("props".into(), DUMMY_SP, SyntaxContext::empty()),
-            type_ann: None,
-        });
-
-        // Build attributes in order: data attributes first, then spread
-        let mut attrs = Vec::with_capacity(
-            2 + usize::from(self.source_file_name.is_some())
-                + usize::from(
-                    self.source_path_attr_ident.is_some() && self.source_file_path.is_some(),
-                ),
-        );
-
-        // Add data-element attribute using the styled component variable name
-        attrs.push(create_jsx_attr(
-            self.config.element_attr_name(),
-            &styled_component_name,
-        ));
-
-        // Add data-source-file attribute
-        if let Some(ref source_file) = self.source_file_name {
-            attrs.push(create_jsx_attr_with_ident_and_str(
-                &self.source_file_attr_ident,
-                source_file,
-            ));
-        }
-
-        // Add data-source-path attribute (only if explicitly configured)
-        if let (Some(ref source_path), Some(ref source_path_attr_ident)) =
-            (&self.source_file_path, &self.source_path_attr_ident)
-        {
-            attrs.push(create_jsx_attr_with_ident_and_str(
-                source_path_attr_ident,
-                source_path,
-            ));
-        }
-
-        // Add spread attribute AFTER data attributes: {...props}
-        attrs.push(JSXAttrOrSpread::SpreadElement(SpreadElement {
-            dot3_token: DUMMY_SP,
-            expr: Box::new(Expr::Ident(Ident::new(
-                "props".into(),
-                DUMMY_SP,
-                SyntaxContext::empty(),
-            ))),
-        }));
-
-        // Create JSX element: <ComponentRef data-element="..." data-source-file="..." {...props} />
-        let jsx_element = JSXElement {
-            span: DUMMY_SP,
-            opening: JSXOpeningElement {
-                name: JSXElementName::Ident(Ident::new(
-                    ref_component_name.into(),
-                    DUMMY_SP,
-                    SyntaxContext::empty(),
-                )),
-                span: DUMMY_SP,
-                attrs,
-                self_closing: true,
-                type_args: None,
-            },
-            children: vec![],
-            closing: None,
-        };
-
-        // Create arrow function: props => <ComponentRef data-element="..." {...props} />
-        let arrow_func = ArrowExpr {
-            span: DUMMY_SP,
-            ctxt: SyntaxContext::empty(),
-            params: vec![props_param],
-            body: Box::new(BlockStmtOrExpr::Expr(Box::new(Expr::JSXElement(Box::new(
-                jsx_element,
-            ))))),
-            is_async: false,
-            is_generator: false,
-            type_params: None,
-            return_type: None,
-        };
-
-        // Replace the first argument with the arrow function
-        call_expr.args[0] = ExprOrSpread {
-            spread: None,
-            expr: Box::new(Expr::Arrow(arrow_func)),
-        };
-    }
-
-    fn register_fragment_aliases_in_stmt(&mut self, stmt: &Stmt) {
-        match stmt {
-            Stmt::Decl(Decl::Var(var_decl)) => {
-                self.register_fragment_aliases_in_var_decl(var_decl);
-            }
-            #[cfg(swc_ast_unknown)]
-            Stmt::Unknown(..) => panic!("unknown statement"),
-            _ => {}
-        }
-    }
-
-    fn register_fragment_aliases_in_var_decl(&mut self, var_decl: &VarDecl) {
-        for declarator in &var_decl.decls {
-            let Pat::Ident(ident) = &declarator.name else {
-                continue;
-            };
-
-            let Some(init) = &declarator.init else {
-                continue;
-            };
-
-            if self.expr_may_resolve_to_fragment(init) {
-                self.register_jsx_identifier(
-                    ident.id.sym.clone(),
-                    JsxIdentifierStatus::Unannotatable,
-                );
-            } else {
-                self.register_jsx_identifier(
-                    ident.id.sym.clone(),
-                    JsxIdentifierStatus::Annotatable,
-                );
-            }
-        }
-    }
-}
-
-fn collect_function_param_scope(params: &[Param]) -> FxHashMap<Atom, JsxIdentifierStatus> {
-    let mut scope = FxHashMap::default();
-
-    for param in params {
-        collect_pat_identifiers(&param.pat, &mut scope);
-    }
-
-    scope
-}
-
-fn collect_pat_list_scope(params: &[Pat]) -> FxHashMap<Atom, JsxIdentifierStatus> {
-    let mut scope = FxHashMap::default();
-
-    for param in params {
-        collect_pat_identifiers(param, &mut scope);
-    }
-
-    scope
-}
-
-fn collect_pat_identifiers(pat: &Pat, scope: &mut FxHashMap<Atom, JsxIdentifierStatus>) {
-    match pat {
-        Pat::Ident(binding_ident) => {
-            scope.insert(
-                binding_ident.id.sym.clone(),
-                JsxIdentifierStatus::Unannotatable,
-            );
-        }
-        Pat::Array(array_pat) => {
-            for elem in array_pat.elems.iter().flatten() {
-                collect_pat_identifiers(elem, scope);
-            }
-        }
-        Pat::Object(object_pat) => {
-            for prop in &object_pat.props {
-                match prop {
-                    ObjectPatProp::KeyValue(key_value) => {
-                        collect_pat_identifiers(&key_value.value, scope);
-                    }
-                    ObjectPatProp::Assign(assign) => {
-                        scope.insert(
-                            assign.key.id.sym.clone(),
-                            JsxIdentifierStatus::Unannotatable,
-                        );
-                    }
-                    ObjectPatProp::Rest(rest) => {
-                        collect_pat_identifiers(&rest.arg, scope);
-                    }
-                    #[cfg(swc_ast_unknown)]
-                    _ => panic!("unknown object pattern prop"),
-                }
-            }
-        }
-        Pat::Rest(rest_pat) => {
-            collect_pat_identifiers(&rest_pat.arg, scope);
-        }
-        Pat::Assign(assign_pat) => {
-            collect_pat_identifiers(&assign_pat.left, scope);
-        }
-        #[cfg(swc_ast_unknown)]
-        Pat::Unknown(..) => panic!("unknown pattern"),
-        _ => {}
+        self.current_component_name = prev_component;
+        self.fragment_child_component_name = prev_fragment_child_component;
     }
 }
 
 impl VisitMut for ReactComponentAnnotateVisitor {
     noop_visit_mut_type!();
+
+    fn visit_mut_module(&mut self, module: &mut Module) {
+        for item in &module.body {
+            self.register_module_item_bindings(item);
+        }
+
+        for item in &mut module.body {
+            self.visit_predeclared_module_item(item);
+        }
+    }
+
+    fn visit_mut_script(&mut self, script: &mut Script) {
+        for stmt in &script.body {
+            self.register_script_stmt_bindings(stmt);
+        }
+
+        for stmt in &mut script.body {
+            self.visit_predeclared_stmt(stmt);
+        }
+    }
 
     fn visit_mut_import_decl(&mut self, import_decl: &mut ImportDecl) {
         self.register_react_imports(import_decl);
@@ -665,7 +628,7 @@ impl VisitMut for ReactComponentAnnotateVisitor {
                 match specifier {
                     // Default import: import styled from '@emotion/styled'
                     ImportSpecifier::Default(default_import) => {
-                        self.styled_import = Some(default_import.local.sym.to_string());
+                        self.styled_import = Some(default_import.local.to_id());
                     }
                     // Named import: import { styled } from '@emotion/styled'
                     ImportSpecifier::Named(named_import) => {
@@ -680,7 +643,7 @@ impl VisitMut for ReactComponentAnnotateVisitor {
 
                         if let Some(imported_name) = imported_name {
                             if imported_name == "default" || imported_name == "styled" {
-                                self.styled_import = Some(named_import.local.sym.to_string());
+                                self.styled_import = Some(named_import.local.to_id());
                             }
                         }
                     }
@@ -695,153 +658,109 @@ impl VisitMut for ReactComponentAnnotateVisitor {
     }
 
     fn visit_mut_fn_decl(&mut self, func_decl: &mut FnDecl) {
-        let component_name = func_decl.ident.sym.to_string();
-        self.find_jsx_in_function_body(&mut func_decl.function, component_name);
-        func_decl.visit_mut_children_with(self);
+        let component_name = func_decl.ident.sym.clone();
+        self.jsx_bindings
+            .insert(func_decl.ident.to_id(), JsxIdentifierStatus::Annotatable);
+        self.visit_function_as_component(&mut func_decl.function, component_name);
     }
 
     fn visit_mut_function(&mut self, function: &mut Function) {
-        self.jsx_identifier_scopes
-            .push(collect_function_param_scope(&function.params));
+        let prev_return_component = self.current_return_component_name.take();
+        let prev_component = self.current_component_name.take();
+        let prev_fragment_child_component = self.fragment_child_component_name.take();
+
+        self.jsx_bindings
+            .push_function_with(collect_function_param_scope(&function.params));
         function.visit_mut_children_with(self);
-        self.jsx_identifier_scopes.pop();
+        self.jsx_bindings.pop();
+
+        self.current_return_component_name = prev_return_component;
+        self.current_component_name = prev_component;
+        self.fragment_child_component_name = prev_fragment_child_component;
     }
 
-    fn visit_mut_var_declarator(&mut self, var_declarator: &mut VarDeclarator) {
-        // Handle arrow functions and function expressions assigned to variables
-        if let Pat::Ident(ident) = &var_declarator.name {
-            let component_name = ident.id.sym.to_string();
-
-            if let Some(init) = &mut var_declarator.init {
-                if self.expr_may_resolve_to_fragment(init) {
-                    self.register_jsx_identifier(
-                        ident.id.sym.clone(),
-                        JsxIdentifierStatus::Unannotatable,
-                    );
-                } else {
-                    self.register_jsx_identifier(
-                        ident.id.sym.clone(),
-                        JsxIdentifierStatus::Annotatable,
-                    );
-                }
-
-                match init.as_mut() {
-                    Expr::Call(call_expr) => {
-                        // Check if this is a styled(ComponentRef) pattern (only if enabled)
-                        if self.config.experimental_rewrite_emotion_styled {
-                            if let Some(ref_component_name) =
-                                self.is_styled_call_with_component_ref(call_expr)
-                            {
-                                // Transform styled(ComponentRef) to styled(props => <ComponentRef {...props} />)
-                                // Use the styled component variable name (e.g., StyledButton) as data-element
-                                self.transform_styled_call(
-                                    call_expr,
-                                    ref_component_name,
-                                    component_name.clone(),
-                                );
-                            }
-                        }
-                    }
-                    Expr::Arrow(arrow_func) => {
-                        self.current_component_name = Some(component_name);
-                        self.jsx_identifier_scopes
-                            .push(collect_pat_list_scope(&arrow_func.params));
-
-                        match arrow_func.body.as_mut() {
-                            BlockStmtOrExpr::BlockStmt(block) => {
-                                for stmt in &block.stmts {
-                                    self.register_fragment_aliases_in_stmt(stmt);
-                                }
-
-                                // Look for return statements in block
-                                for stmt in &mut block.stmts {
-                                    if let Stmt::Return(return_stmt) = stmt {
-                                        if let Some(arg) = &mut return_stmt.arg {
-                                            self.process_return_expression(arg);
-                                        }
-                                    }
-                                }
-                            }
-                            BlockStmtOrExpr::Expr(expr) => {
-                                // Direct expression return
-                                self.process_return_expression(expr);
-                            }
-                            #[cfg(swc_ast_unknown)]
-                            _ => panic!("unknown block stmt or expr"),
-                        }
-
-                        self.jsx_identifier_scopes.pop();
-                        self.current_component_name = None;
-                    }
-                    Expr::Fn(func_expr) => {
-                        self.find_jsx_in_function_body(&mut func_expr.function, component_name);
-                    }
-                    #[cfg(swc_ast_unknown)]
-                    Expr::Unknown(..) => panic!("unknown expr"),
-                    _ => {}
-                }
-            }
-        }
-
-        var_declarator.visit_mut_children_with(self);
+    fn visit_mut_var_decl(&mut self, var_decl: &mut VarDecl) {
+        self.visit_var_decl(var_decl, true);
     }
 
     fn visit_mut_class_decl(&mut self, class_decl: &mut ClassDecl) {
-        let component_name = class_decl.ident.sym.to_string();
+        let component_name = class_decl.ident.sym.clone();
+        self.jsx_bindings
+            .insert(class_decl.ident.to_id(), JsxIdentifierStatus::Annotatable);
 
-        // Look for render method
         for member in &mut class_decl.class.body {
             match member {
+                ClassMember::Method(method) if matches!(&method.key, PropName::Ident(ident) if ident.sym.as_ref() == "render") =>
+                {
+                    self.visit_function_as_component(&mut method.function, component_name.clone());
+                }
                 ClassMember::Method(method) => match &method.key {
-                    PropName::Ident(ident) => {
-                        if ident.sym.as_ref() == "render" {
-                            if let Some(body) = &mut method.function.body {
-                                self.current_component_name = Some(component_name.clone());
-                                self.jsx_identifier_scopes
-                                    .push(collect_function_param_scope(&method.function.params));
-
-                                for stmt in &body.stmts {
-                                    self.register_fragment_aliases_in_stmt(stmt);
-                                }
-
-                                // Look for return statements
-                                for stmt in &mut body.stmts {
-                                    if let Stmt::Return(return_stmt) = stmt {
-                                        if let Some(arg) = &mut return_stmt.arg {
-                                            self.process_return_expression(arg);
-                                        }
-                                    }
-                                }
-
-                                self.jsx_identifier_scopes.pop();
-                                self.current_component_name = None;
-                            }
-                        }
-                    }
                     #[cfg(swc_ast_unknown)]
                     PropName::Unknown(..) => panic!("unknown prop name"),
-                    _ => {}
+                    _ => method.visit_mut_children_with(self),
                 },
                 #[cfg(swc_ast_unknown)]
                 ClassMember::Unknown(..) => panic!("unknown class member"),
-                _ => {}
+                _ => member.visit_mut_with(self),
             }
         }
-
-        class_decl.visit_mut_children_with(self);
     }
 
     fn visit_mut_block_stmt(&mut self, block_stmt: &mut BlockStmt) {
-        self.jsx_identifier_scopes.push(FxHashMap::default());
-        block_stmt.visit_mut_children_with(self);
-        self.jsx_identifier_scopes.pop();
+        self.jsx_bindings.push_block();
+
+        for stmt in &block_stmt.stmts {
+            self.register_script_stmt_bindings(stmt);
+        }
+
+        for stmt in &mut block_stmt.stmts {
+            self.visit_predeclared_stmt(stmt);
+        }
+        self.jsx_bindings.pop();
+    }
+
+    fn visit_mut_switch_stmt(&mut self, switch_stmt: &mut SwitchStmt) {
+        switch_stmt.discriminant.visit_mut_with(self);
+        self.jsx_bindings.push_block();
+
+        for case in &switch_stmt.cases {
+            for stmt in &case.cons {
+                self.register_script_stmt_bindings(stmt);
+            }
+        }
+
+        for case in &mut switch_stmt.cases {
+            if let Some(test) = &mut case.test {
+                test.visit_mut_with(self);
+            }
+
+            for stmt in &mut case.cons {
+                self.visit_predeclared_stmt(stmt);
+            }
+        }
+
+        self.jsx_bindings.pop();
     }
 
     fn visit_mut_arrow_expr(&mut self, arrow_expr: &mut ArrowExpr) {
-        self.jsx_identifier_scopes
-            .push(collect_pat_list_scope(&arrow_expr.params));
+        let prev_return_component = self.current_return_component_name.take();
+        let prev_component = self.current_component_name.take();
+        let prev_fragment_child_component = self.fragment_child_component_name.take();
+
+        self.jsx_bindings
+            .push_function_with(collect_pat_list_scope(&arrow_expr.params));
         arrow_expr.visit_mut_children_with(self);
-        self.jsx_identifier_scopes.pop();
+        self.jsx_bindings.pop();
+
+        self.current_return_component_name = prev_return_component;
+        self.current_component_name = prev_component;
+        self.fragment_child_component_name = prev_fragment_child_component;
+    }
+
+    fn visit_mut_return_stmt(&mut self, return_stmt: &mut ReturnStmt) {
+        if let Some(arg) = &mut return_stmt.arg {
+            self.visit_component_return_expr(arg);
+        }
     }
 
     fn visit_mut_jsx_element(&mut self, jsx_element: &mut JSXElement) {
