@@ -17,13 +17,13 @@ crate-type = ["cdylib", "lib"]
 rustc-hash = "2.1.1"
 serde = { version = "1.0.225", features = ["derive"], default-features = false }
 serde_json = { version = "1.0.145", default-features = false }
-# Kept in line with rspack https://github.com/web-infra-dev/rspack/blob/main/Cargo.toml
-swc_core = { version = "54.0.0", features = ["ecma_plugin_transform"] }
+# Pinned to the swc_core ABI embedded in @rspack/core 2.1.x.
+swc_core = { version = "=71.0.1", features = ["ecma_plugin_transform"] }
 
 
 [dev-dependencies]
-testing = "18.0.0"
-swc_core = { version = "54.0.0", features = ["ecma_plugin_transform", "ecma_parser", "swc_ecma_transforms_testing"] }
+testing = "24.0.1"
+swc_core = { version = "=71.0.1", features = ["ecma_plugin_transform", "ecma_parser", "swc_ecma_transforms_testing"] }
 
 [profile.release]
 codegen-units = 1

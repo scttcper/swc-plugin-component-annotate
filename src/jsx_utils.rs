@@ -1,22 +1,6 @@
 use std::borrow::Cow;
 use swc_core::ecma::ast::*;
 
-/// Check if a JSX element is a React Fragment
-#[inline]
-pub fn is_react_fragment(element: &JSXElementName) -> bool {
-    match element {
-        JSXElementName::Ident(ident) => ident.sym.as_ref() == "Fragment",
-        JSXElementName::JSXMemberExpr(member_expr) => matches!(
-            &member_expr.obj,
-            JSXObject::Ident(obj)
-                if obj.sym.as_ref() == "React" && member_expr.prop.sym.as_ref() == "Fragment"
-        ),
-        JSXElementName::JSXNamespacedName(_) => false,
-        #[cfg(swc_ast_unknown)]
-        _ => panic!("unknown jsx element name"),
-    }
-}
-
 /// Extract the element name from a JSX element
 #[inline]
 pub fn get_element_name(element: &JSXElementName) -> Cow<str> {
