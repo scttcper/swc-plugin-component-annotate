@@ -56,6 +56,14 @@ export function LocalFragmentShadowsImport({children}) {
   return <Fragment>{children}</Fragment>;
 }
 
+export function LocalFragmentShadowsImportBeforeDeclaration({children}) {
+  return <Fragment>{children}</Fragment>;
+
+  function Fragment({children}) {
+    return <article>{children}</article>;
+  }
+}
+
 export function LocalNamespaceShadowsImport({children}) {
   const ReactNamespace = {
     Fragment: ({children}) => <article>{children}</article>,

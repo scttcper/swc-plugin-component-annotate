@@ -40,6 +40,12 @@ export function LocalFragmentShadowsImport({ children }) {
     const Fragment = ({ children })=><article data-component="Fragment" data-source-file="test.jsx">{children}</article>;
     return <Fragment data-element="Fragment" data-component="LocalFragmentShadowsImport" data-source-file="test.jsx">{children}</Fragment>;
 }
+export function LocalFragmentShadowsImportBeforeDeclaration({ children }) {
+    return <Fragment data-element="Fragment" data-component="LocalFragmentShadowsImportBeforeDeclaration" data-source-file="test.jsx">{children}</Fragment>;
+    function Fragment({ children }) {
+        return <article data-component="Fragment" data-source-file="test.jsx">{children}</article>;
+    }
+}
 export function LocalNamespaceShadowsImport({ children }) {
     const ReactNamespace = {
         Fragment: ({ children })=><article>{children}</article>
