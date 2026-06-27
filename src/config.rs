@@ -10,6 +10,11 @@ pub struct PluginConfig {
     #[serde(default, rename = "ignored-components")]
     pub ignored_components: Vec<String>,
 
+    /// List of component names that should pass through the current component annotation
+    /// without adding their own element annotation
+    #[serde(default, rename = "transparent-components")]
+    pub transparent_components: Vec<String>,
+
     /// Custom component attribute name (overrides default and native setting)
     #[serde(default, rename = "component-attr")]
     pub component_attr: Option<String>,

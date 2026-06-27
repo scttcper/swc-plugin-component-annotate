@@ -2,6 +2,9 @@ import React from 'react';
 
 // This component should be ignored
 function IgnoredComponent() {
+    function NestedRegularComponent() {
+        return <aside data-component="NestedRegularComponent" data-source-file="test.jsx">Nested regular component</aside>;
+    }
   return <div>This should not have attributes</div>;
 }
 
@@ -32,4 +35,4 @@ class RegularClassComponent extends React.Component {
   render() {
     return <article data-component="RegularClassComponent" data-source-file="test.jsx">Regular class component</article>;
   }
-} 
+}

@@ -26,6 +26,13 @@ enum JsxIdentifierStatus {
     Unannotatable,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ComponentAnnotationPolicy {
+    Normal,
+    Ignored,
+    Transparent,
+}
+
 pub struct ReactComponentAnnotateVisitor {
     config: PluginConfig,
     source_file_name: Option<Str>,
@@ -33,6 +40,7 @@ pub struct ReactComponentAnnotateVisitor {
     current_component_name: Option<String>,
     ignored_elements: &'static FxHashSet<&'static str>,
     ignored_components_set: FxHashSet<String>,
+    transparent_components_set: FxHashSet<String>,
     // JSX identifiers that may render React.Fragment cannot receive custom props.
     jsx_identifier_scopes: Vec<FxHashMap<Atom, JsxIdentifierStatus>>,
     fragment_component_identifiers: FxHashSet<Atom>,
@@ -61,6 +69,8 @@ impl ReactComponentAnnotateVisitor {
         // Pre-compute ignored components set for O(1) lookups
         let ignored_components_set: FxHashSet<String> =
             config.ignored_components.iter().cloned().collect();
+        let transparent_components_set: FxHashSet<String> =
+            config.transparent_components.iter().cloned().collect();
         let component_attr_ident = IdentName::new(config.component_attr_name().into(), DUMMY_SP);
         let element_attr_ident = IdentName::new(config.element_attr_name().into(), DUMMY_SP);
         let source_file_attr_ident =
@@ -80,6 +90,7 @@ impl ReactComponentAnnotateVisitor {
             element_attr_ident,
             ignored_elements: constants::default_ignored_elements(),
             ignored_components_set,
+            transparent_components_set,
             jsx_identifier_scopes: Vec::new(),
             fragment_component_identifiers,
             react_namespace_identifiers,
@@ -95,6 +106,32 @@ impl ReactComponentAnnotateVisitor {
     #[inline]
     pub fn should_ignore_component(&self, component_name: &str) -> bool {
         self.ignored_components_set.contains(component_name)
+    }
+
+    #[inline]
+    pub fn should_treat_component_as_transparent(&self, component_name: &str) -> bool {
+        self.transparent_components_set.contains(component_name)
+    }
+
+    #[inline]
+    fn component_annotation_policy(&self, component_name: &str) -> ComponentAnnotationPolicy {
+        if self.should_ignore_component(component_name) {
+            ComponentAnnotationPolicy::Ignored
+        } else if self.should_treat_component_as_transparent(component_name) {
+            ComponentAnnotationPolicy::Transparent
+        } else {
+            ComponentAnnotationPolicy::Normal
+        }
+    }
+
+    #[inline]
+    fn should_skip_component_return(&self, component_name: &str) -> bool {
+        self.component_annotation_policy(component_name) != ComponentAnnotationPolicy::Normal
+    }
+
+    #[inline]
+    fn should_skip_component_child_traversal(&self, component_name: &str) -> bool {
+        self.component_annotation_policy(component_name) == ComponentAnnotationPolicy::Transparent
     }
 
     #[inline]
@@ -302,7 +339,7 @@ impl ReactComponentAnnotateVisitor {
 
         // Check if component should be ignored
         if let Some(ref component_name) = self.current_component_name {
-            if self.should_ignore_component(component_name) {
+            if self.should_skip_component_return(component_name) {
                 return;
             }
         }
@@ -312,18 +349,21 @@ impl ReactComponentAnnotateVisitor {
         }
 
         let is_ignored_html = self.should_ignore_element(&element_name);
-        let add_element_attr = !is_ignored_html
+        let is_transparent_element = self.should_treat_component_as_transparent(&element_name);
+        let can_annotate_element = !is_ignored_html && !is_transparent_element;
+        let has_current_component = self.current_component_name.is_some();
+        let add_element_attr = can_annotate_element
             && !has_attribute(opening_element, self.config.element_attr_name())
             && (self.config.component_attr_name() != self.config.element_attr_name()
-                || self.current_component_name.is_none());
-        let add_component_attr = self.current_component_name.is_some()
+                || !has_current_component);
+        let add_component_attr = has_current_component
             && !has_attribute(opening_element, self.config.component_attr_name());
         let add_source_file_attr = self.source_file_name.is_some()
-            && (self.current_component_name.is_some() || !is_ignored_html)
+            && (has_current_component || can_annotate_element)
             && !has_attribute(opening_element, self.config.source_file_attr_name());
         let add_source_path_attr = self.source_file_path.is_some()
             && self.source_path_attr_ident.is_some()
-            && (self.current_component_name.is_some() || !is_ignored_html)
+            && (has_current_component || can_annotate_element)
             && !has_attribute(opening_element, self.config.source_path_attr_name());
 
         let attr_count = usize::from(add_element_attr)
@@ -696,8 +736,11 @@ impl VisitMut for ReactComponentAnnotateVisitor {
 
     fn visit_mut_fn_decl(&mut self, func_decl: &mut FnDecl) {
         let component_name = func_decl.ident.sym.to_string();
+        let should_skip_children = self.should_skip_component_child_traversal(&component_name);
         self.find_jsx_in_function_body(&mut func_decl.function, component_name);
-        func_decl.visit_mut_children_with(self);
+        if !should_skip_children {
+            func_decl.visit_mut_children_with(self);
+        }
     }
 
     fn visit_mut_function(&mut self, function: &mut Function) {
@@ -709,8 +752,12 @@ impl VisitMut for ReactComponentAnnotateVisitor {
 
     fn visit_mut_var_declarator(&mut self, var_declarator: &mut VarDeclarator) {
         // Handle arrow functions and function expressions assigned to variables
+        let mut should_skip_children = false;
+
         if let Pat::Ident(ident) = &var_declarator.name {
             let component_name = ident.id.sym.to_string();
+            let component_policy = self.component_annotation_policy(&component_name);
+            should_skip_children = component_policy == ComponentAnnotationPolicy::Transparent;
 
             if let Some(init) = &mut var_declarator.init {
                 if self.expr_may_resolve_to_fragment(init) {
@@ -728,7 +775,9 @@ impl VisitMut for ReactComponentAnnotateVisitor {
                 match init.as_mut() {
                     Expr::Call(call_expr) => {
                         // Check if this is a styled(ComponentRef) pattern (only if enabled)
-                        if self.config.experimental_rewrite_emotion_styled {
+                        if self.config.experimental_rewrite_emotion_styled
+                            && component_policy == ComponentAnnotationPolicy::Normal
+                        {
                             if let Some(ref_component_name) =
                                 self.is_styled_call_with_component_ref(call_expr)
                             {
@@ -783,11 +832,14 @@ impl VisitMut for ReactComponentAnnotateVisitor {
             }
         }
 
-        var_declarator.visit_mut_children_with(self);
+        if !should_skip_children {
+            var_declarator.visit_mut_children_with(self);
+        }
     }
 
     fn visit_mut_class_decl(&mut self, class_decl: &mut ClassDecl) {
         let component_name = class_decl.ident.sym.to_string();
+        let should_skip_children = self.should_skip_component_child_traversal(&component_name);
 
         // Look for render method
         for member in &mut class_decl.class.body {
@@ -828,7 +880,9 @@ impl VisitMut for ReactComponentAnnotateVisitor {
             }
         }
 
-        class_decl.visit_mut_children_with(self);
+        if !should_skip_children {
+            class_decl.visit_mut_children_with(self);
+        }
     }
 
     fn visit_mut_block_stmt(&mut self, block_stmt: &mut BlockStmt) {

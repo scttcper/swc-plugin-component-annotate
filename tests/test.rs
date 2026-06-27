@@ -117,6 +117,8 @@ fn test(input: PathBuf) {
     let is_source_path_test = dir.file_name().unwrap().to_str().unwrap() == "react_source_path";
     let is_inline_styled_test =
         dir.file_name().unwrap().to_str().unwrap() == "react_inline_styled_component";
+    let is_transparent_components_test =
+        dir.file_name().unwrap().to_str().unwrap() == "react_transparent_components";
 
     let config = if is_sentry_test || is_index_test {
         PluginConfig {
@@ -142,6 +144,17 @@ fn test(input: PathBuf) {
     } else if is_inline_styled_test {
         PluginConfig {
             experimental_rewrite_emotion_styled: true,
+            ..Default::default()
+        }
+    } else if is_transparent_components_test {
+        PluginConfig {
+            experimental_rewrite_emotion_styled: true,
+            transparent_components: vec![
+                "Container".to_string(),
+                "Flex".to_string(),
+                "Grid".to_string(),
+                "Stack".to_string(),
+            ],
             ..Default::default()
         }
     } else {
@@ -178,6 +191,7 @@ fn test_ignored_components_config() {
     // Test default config has no ignored components
     let default_config = PluginConfig::default();
     assert!(default_config.ignored_components.is_empty());
+    assert!(default_config.transparent_components.is_empty());
 
     // Test JSON parsing with ignored components
     let json_config = r#"{
@@ -221,6 +235,7 @@ fn test_plugin_config_parsing() {
     // Test that the plugin correctly parses JSON configuration with all options
     let config_json = r#"{
         "ignored-components": ["TestIgnored", "AnotherIgnored"],
+        "transparent-components": ["Container", "Flex"],
         "native": true,
         "component-attr": "customComponent",
         "element-attr": "customElement",
@@ -238,6 +253,13 @@ fn test_plugin_config_parsing() {
     assert!(parsed_config
         .ignored_components
         .contains(&"AnotherIgnored".to_string()));
+    assert_eq!(parsed_config.transparent_components.len(), 2);
+    assert!(parsed_config
+        .transparent_components
+        .contains(&"Container".to_string()));
+    assert!(parsed_config
+        .transparent_components
+        .contains(&"Flex".to_string()));
     assert!(parsed_config.native);
     assert_eq!(
         parsed_config.component_attr,
