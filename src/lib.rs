@@ -520,7 +520,12 @@ impl ReactComponentAnnotateVisitor {
         let is_ignored_html = self.should_ignore_element(&element_name);
         let is_transparent_element = self.should_treat_component_as_transparent(&element_name);
         let can_annotate_element = !is_ignored_html && !is_transparent_element;
-        let has_current_component = self.current_component_name.is_some();
+        let owner_component_name = self.current_component_name.as_ref().or_else(|| {
+            is_transparent_element
+                .then_some(())
+                .and_then(|_| self.fragment_child_component_name.as_ref())
+        });
+        let has_owner_component = owner_component_name.is_some();
         let existing_attrs = attribute_presence(
             opening_element,
             &self.component_attr_ident,
@@ -531,14 +536,14 @@ impl ReactComponentAnnotateVisitor {
         let add_element_attr = can_annotate_element
             && !existing_attrs.element
             && (self.config.component_attr_name() != self.config.element_attr_name()
-                || !has_current_component);
-        let add_component_attr = has_current_component && !existing_attrs.component;
+                || !has_owner_component);
+        let add_component_attr = has_owner_component && !existing_attrs.component;
         let add_source_file_attr = self.source_file_name.is_some()
-            && (has_current_component || can_annotate_element)
+            && (has_owner_component || can_annotate_element)
             && !existing_attrs.source_file;
         let add_source_path_attr = self.source_file_path.is_some()
             && self.source_path_attr_ident.is_some()
-            && (has_current_component || can_annotate_element)
+            && (has_owner_component || can_annotate_element)
             && !existing_attrs.source_path;
 
         let attr_count = usize::from(add_element_attr)
@@ -546,20 +551,18 @@ impl ReactComponentAnnotateVisitor {
             + usize::from(add_source_file_attr)
             + usize::from(add_source_path_attr);
 
-        if attr_count > 0 {
-            opening_element.attrs.reserve(attr_count);
-        }
+        let mut attrs = Vec::with_capacity(attr_count);
 
         if add_element_attr {
-            opening_element.attrs.push(create_jsx_attr_with_ident(
+            attrs.push(create_jsx_attr_with_ident(
                 &self.element_attr_ident,
                 &element_name,
             ));
         }
 
         if add_component_attr {
-            if let Some(ref component_name) = self.current_component_name {
-                opening_element.attrs.push(create_jsx_attr_with_ident(
+            if let Some(component_name) = owner_component_name {
+                attrs.push(create_jsx_attr_with_ident(
                     &self.component_attr_ident,
                     component_name.as_ref(),
                 ));
@@ -568,12 +571,10 @@ impl ReactComponentAnnotateVisitor {
 
         if add_source_file_attr {
             if let Some(ref source_file) = self.source_file_name {
-                opening_element
-                    .attrs
-                    .push(create_jsx_attr_with_ident_and_str(
-                        &self.source_file_attr_ident,
-                        source_file,
-                    ));
+                attrs.push(create_jsx_attr_with_ident_and_str(
+                    &self.source_file_attr_ident,
+                    source_file,
+                ));
             }
         }
 
@@ -581,14 +582,23 @@ impl ReactComponentAnnotateVisitor {
             if let (Some(ref source_path), Some(ref source_path_attr_ident)) =
                 (&self.source_file_path, &self.source_path_attr_ident)
             {
-                opening_element
-                    .attrs
-                    .push(create_jsx_attr_with_ident_and_str(
-                        source_path_attr_ident,
-                        source_path,
-                    ));
+                attrs.push(create_jsx_attr_with_ident_and_str(
+                    source_path_attr_ident,
+                    source_path,
+                ));
             }
         }
+
+        if attrs.is_empty() {
+            return;
+        }
+
+        let insert_at = opening_element
+            .attrs
+            .iter()
+            .position(|attr| matches!(attr, JSXAttrOrSpread::SpreadElement(_)))
+            .unwrap_or(opening_element.attrs.len());
+        opening_element.attrs.splice(insert_at..insert_at, attrs);
     }
 
     fn visit_function_as_component(&mut self, func: &mut Function, component_name: Atom) {

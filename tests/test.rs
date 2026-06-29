@@ -115,6 +115,8 @@ fn test(input: PathBuf) {
     let is_ignored_components_test =
         dir.file_name().unwrap().to_str().unwrap() == "react_ignored_components";
     let is_source_path_test = dir.file_name().unwrap().to_str().unwrap() == "react_source_path";
+    let is_forwarded_props_precedence_test =
+        dir.file_name().unwrap().to_str().unwrap() == "react_forwarded_props_precedence";
     let is_inline_styled_test =
         dir.file_name().unwrap().to_str().unwrap() == "react_inline_styled_component";
     let is_transparent_components_test =
@@ -136,7 +138,7 @@ fn test(input: PathBuf) {
             ],
             ..Default::default()
         }
-    } else if is_source_path_test {
+    } else if is_source_path_test || is_forwarded_props_precedence_test {
         PluginConfig {
             source_path_attr: Some("data-source-path".to_string()),
             ..Default::default()
@@ -150,11 +152,14 @@ fn test(input: PathBuf) {
         PluginConfig {
             experimental_rewrite_emotion_styled: true,
             transparent_components: vec![
+                "Button".to_string(),
                 "Container".to_string(),
                 "Flex".to_string(),
                 "Grid".to_string(),
                 "LayoutStack".to_string(),
+                "Link".to_string(),
                 "Stack".to_string(),
+                "Text".to_string(),
             ],
             ..Default::default()
         }
@@ -168,6 +173,11 @@ fn test(input: PathBuf) {
     } else if is_source_path_test {
         FileName::Custom(
             "/mock/absolute/path/tests/fixture/react_source_path/input.jsx".to_string(),
+        )
+    } else if is_forwarded_props_precedence_test {
+        FileName::Custom(
+            "/mock/absolute/path/tests/fixture/react_forwarded_props_precedence/input.jsx"
+                .to_string(),
         )
     } else {
         FileName::Custom("test.jsx".to_string())

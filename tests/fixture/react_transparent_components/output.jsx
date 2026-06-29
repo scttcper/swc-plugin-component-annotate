@@ -11,13 +11,25 @@ function FirstLastSeenSection() {
 }
 function CheckoutSummary() {
     return <Stack data-component="CheckoutSummary" data-source-file="test.jsx">
-      <Button data-element="Button" data-source-file="test.jsx"/>
+      <Button data-component="CheckoutSummary" data-source-file="test.jsx"/>
       <StyledFlex data-element="StyledFlex" data-source-file="test.jsx"/>
-      <Grid/>
+      <Grid data-component="CheckoutSummary" data-source-file="test.jsx"/>
     </Stack>;
 }
 function LayoutStackUsage() {
     return <LayoutStack data-component="LayoutStackUsage" data-source-file="test.jsx"/>;
+}
+function MergedItem() {
+    return <MergedGroup data-element="MergedGroup" data-component="MergedItem" data-source-file="test.jsx">
+      <Grid data-component="MergedItem" data-source-file="test.jsx">
+        <Flex data-component="MergedItem" data-source-file="test.jsx">
+          <Text data-component="MergedItem" data-source-file="test.jsx">
+            <Link data-component="MergedItem" data-source-file="test.jsx">Latest event</Link>
+          </Text>
+        </Flex>
+        <Button aria-label="Show fingerprints" data-component="MergedItem" data-source-file="test.jsx"/>
+      </Grid>
+    </MergedGroup>;
 }
 const Stack = memo(function Stack(props) {
     return <Flex {...props}/>;
@@ -42,6 +54,13 @@ const LayoutStack = Object.assign(LayoutStackComponent, {
 });
 const Grid = styled(Container);
 const StyledFlex = styled((props)=><Container data-element="StyledFlex" data-source-file="test.jsx" {...props}/>);
-function Button() {
-    return <button data-component="Button" data-source-file="test.jsx">Click me</button>;
+const MergedGroup = styled('div')``;
+function Button(props) {
+    return <button {...props}>Click me</button>;
+}
+function Text(props) {
+    return <span {...props}/>;
+}
+function Link(props) {
+    return <a {...props}/>;
 }

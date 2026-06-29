@@ -27,6 +27,21 @@ function LayoutStackUsage() {
   return <LayoutStack />;
 }
 
+function MergedItem() {
+  return (
+    <MergedGroup>
+      <Grid>
+        <Flex>
+          <Text>
+            <Link>Latest event</Link>
+          </Text>
+        </Flex>
+        <Button aria-label="Show fingerprints" />
+      </Grid>
+    </MergedGroup>
+  );
+}
+
 const Stack = memo(function Stack(props) {
   return <Flex {...props} />;
 });
@@ -57,7 +72,16 @@ const LayoutStack = Object.assign(LayoutStackComponent, {
 
 const Grid = styled(Container);
 const StyledFlex = styled(Container);
+const MergedGroup = styled('div')``;
 
-function Button() {
-  return <button>Click me</button>;
+function Button(props) {
+  return <button {...props}>Click me</button>;
+}
+
+function Text(props) {
+  return <span {...props} />;
+}
+
+function Link(props) {
+  return <a {...props} />;
 }

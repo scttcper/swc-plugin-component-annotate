@@ -73,7 +73,7 @@ Add the plugin to your `.swcrc` configuration:
 
 - **`ignored-components`** (array, default: `[]`): List of component names to skip during annotation
 
-- **`transparent-components`** (array, default: `[]`): List of pass-through component names that should keep the nearest owning component annotation instead of being reported as their own element. This is intended for uninteresting wrappers such as `Flex`, `Stack`, `Grid`, or `Container`.
+- **`transparent-components`** (array, default: `[]`): List of pass-through component names that should keep the nearest owning component annotation instead of being reported as their own element. This is useful for layout primitives such as `Flex`, `Stack`, `Grid`, or `Container`, and for design-system primitives when owner-only DOM annotations are preferred.
 
 - **`component-attr`** (string, optional): Custom component attribute name (overrides default and native setting)
 
@@ -113,7 +113,7 @@ This will generate attributes like:
 
 #### Transparent Components
 
-Use `transparent-components` for components that are implementation detail, not the thing a user is trying to understand or interact with. Layout primitives are the typical case:
+Use `transparent-components` for components where the caller is more useful context than the component's own implementation. Layout primitives are the typical case:
 
 ```jsx
 function IssueActions() {
@@ -125,7 +125,7 @@ function IssueActions() {
 }
 ```
 
-In this example, `Flex` is layout plumbing. `Button` is the meaningful target. With `Flex` configured as transparent, the layout wrapper keeps the owning component metadata without reporting itself as the element:
+In this example, `Flex` is layout plumbing. With `Flex` configured as transparent, the layout wrapper keeps the owning component metadata without reporting itself as the element:
 
 ```jsx
 function IssueActions() {
@@ -139,7 +139,23 @@ function IssueActions() {
 }
 ```
 
-If a transparent layout component renders a polymorphic DOM element internally, that implementation is not annotated. Forwarded attributes can pass through instead of being overwritten by the layout component's own file:
+If the React component `Button` is also configured as transparent, its annotation intentionally collapses to the owner:
+
+```jsx
+function IssueActions() {
+  return (
+    <Flex data-sentry-component="IssueActions" data-sentry-source-file="issueActions.tsx">
+      <Button data-sentry-component="IssueActions" data-sentry-source-file="issueActions.tsx">
+        Resolve
+      </Button>
+    </Flex>
+  );
+}
+```
+
+For a `Button` implementation that forwards props to a `button`, those owner attributes become the final DOM attributes.
+
+If a transparent component renders a polymorphic DOM element internally, that implementation is not annotated. Forwarded attributes can pass through instead of being overwritten by the transparent component's own file:
 
 ```jsx
 const Container = memo(function Container({as: Component = 'div', ...props}) {
@@ -155,9 +171,9 @@ The useful result is that layout DOM points at the owner that rendered it, not a
 </div>
 ```
 
-Do not use `transparent-components` for components whose name is itself useful context, such as `Button`, `Link`, `Checkbox`, or `MenuItem`. Those components represent meaningful interaction targets. For analytics and debugging, a click should be able to say "the `Button` rendered by `IssueActions` was clicked", not just "something inside `IssueActions` was clicked".
+Whether to include components such as `Button`, `Link`, `Checkbox`, or `MenuItem` depends on the signal you want in the DOM. Leave them out of `transparent-components` when their component name is useful context, for example "the `Button` rendered by `IssueActions`". Include them when the owning component is the preferred label everywhere, for example "the `IssueActions` UI rendered this DOM node".
 
-Use `ignored-components` only when a component should not participate in annotation at all. Use `transparent-components` when a wrapper should pass through the nearest useful owner instead.
+Use `ignored-components` only when a component should not participate in annotation at all. Ignored components get no generated attributes. Use `transparent-components` when a component should still receive useful owner metadata, but should not report itself as `data-sentry-element`.
 
 ## Examples
 
