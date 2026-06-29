@@ -1,6 +1,6 @@
 {
   "name": "swc-plugin-component-annotate",
-  "version": "1.15.3",
+  "version": "1.15.4",
   "description": "Use SWC to automatically annotate React components with data attributes for component tracking",
   "author": "scttcper <scttcper@gmail.com>",
   "license": "MIT",

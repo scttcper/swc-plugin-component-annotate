@@ -2,7 +2,7 @@ import React from 'react';
 import styled from '@emotion/styled';
 // A regular React component
 const Button = ({ children, ...props })=>{
-    return <button data-component="Button" data-source-file="test.jsx" {...props}>{children}</button>;
+    return <button {...props} data-component="Button" data-source-file="test.jsx">{children}</button>;
 };
 // Styled component using component reference
 const StyledButton = styled((props)=><Button data-element="StyledButton" data-source-file="test.jsx" {...props}/>);

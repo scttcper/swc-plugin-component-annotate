@@ -7,11 +7,11 @@ function ForwardedAction() {
     </div>;
 }
 function ForwardedButton(props) {
-    return <button data-component="ForwardedButton" data-source-file="input.jsx" data-source-path="/mock/absolute/path/tests/fixture/react_forwarded_props_precedence/input.jsx" {...props}>Forwarded</button>;
+    return <button {...props} data-component="ForwardedButton" data-source-file="input.jsx" data-source-path="/mock/absolute/path/tests/fixture/react_forwarded_props_precedence/input.jsx">Forwarded</button>;
 }
 function ForwardedPanel(props) {
-    return <div className="panel" data-component="ForwardedPanel" data-source-file="input.jsx" data-source-path="/mock/absolute/path/tests/fixture/react_forwarded_props_precedence/input.jsx" {...props}>Panel</div>;
+    return <div className="panel" {...props} data-component="ForwardedPanel" data-source-file="input.jsx" data-source-path="/mock/absolute/path/tests/fixture/react_forwarded_props_precedence/input.jsx">Panel</div>;
 }
 function ForwardedInput(props) {
-    return <input type="text" data-component="ForwardedInput" data-source-file="input.jsx" data-source-path="/mock/absolute/path/tests/fixture/react_forwarded_props_precedence/input.jsx" {...props}/>;
+    return <input type="text" {...props} data-component="ForwardedInput" data-source-file="input.jsx" data-source-path="/mock/absolute/path/tests/fixture/react_forwarded_props_precedence/input.jsx"/>;
 }

@@ -34,6 +34,19 @@ enum ComponentAnnotationPolicy {
     Transparent,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AttributeInsertionPosition {
+    Append,
+    // JSX spreads are order-sensitive. Transparent callsite metadata must sit
+    // before a forwarded props spread so owner attrs can pass through wrappers.
+    BeforeFirstSpread,
+}
+
+struct ElementAttrs {
+    attrs: Vec<JSXAttrOrSpread>,
+    insertion_position: AttributeInsertionPosition,
+}
+
 pub struct ReactComponentAnnotateVisitor {
     config: PluginConfig,
     source_file_name: Option<Str>,
@@ -130,12 +143,95 @@ impl ReactComponentAnnotateVisitor {
 
     #[inline]
     fn should_skip_component_child_traversal(&self, component_name: &str) -> bool {
+        // Transparent component bodies should not stamp their implementation
+        // file onto forwarded DOM; callers provide the useful owner metadata.
         self.component_annotation_policy(component_name) == ComponentAnnotationPolicy::Transparent
     }
 
     #[inline]
     fn should_ignore_element(&self, element_name: &str) -> bool {
         self.ignored_elements.contains(element_name)
+    }
+
+    fn element_attrs(
+        &self,
+        element_name: &str,
+        existing_attrs: &AttributePresence,
+    ) -> Option<ElementAttrs> {
+        if let Some(ref component_name) = self.current_component_name {
+            if self.should_skip_component_return(component_name) {
+                return None;
+            }
+        }
+
+        let element_policy = self.component_annotation_policy(element_name);
+        if element_policy == ComponentAnnotationPolicy::Ignored {
+            return None;
+        }
+
+        let can_annotate_element = !self.should_ignore_element(element_name)
+            && element_policy == ComponentAnnotationPolicy::Normal;
+        let owner_component_name = self.current_component_name.as_ref().or_else(|| {
+            (element_policy == ComponentAnnotationPolicy::Transparent)
+                .then_some(())
+                .and_then(|_| self.fragment_child_component_name.as_ref())
+        });
+        let has_owner_component = owner_component_name.is_some();
+
+        let mut attrs = Vec::with_capacity(4);
+
+        if can_annotate_element
+            && !existing_attrs.element
+            && (self.config.component_attr_name() != self.config.element_attr_name()
+                || !has_owner_component)
+        {
+            attrs.push(create_jsx_attr_with_ident(
+                &self.element_attr_ident,
+                element_name,
+            ));
+        }
+
+        if !existing_attrs.component {
+            if let Some(component_name) = owner_component_name {
+                attrs.push(create_jsx_attr_with_ident(
+                    &self.component_attr_ident,
+                    component_name.as_ref(),
+                ));
+            }
+        }
+
+        if !existing_attrs.source_file && (has_owner_component || can_annotate_element) {
+            if let Some(ref source_file) = self.source_file_name {
+                attrs.push(create_jsx_attr_with_ident_and_str(
+                    &self.source_file_attr_ident,
+                    source_file,
+                ));
+            }
+        }
+
+        if !existing_attrs.source_path && (has_owner_component || can_annotate_element) {
+            if let (Some(ref source_path), Some(ref source_path_attr_ident)) =
+                (&self.source_file_path, &self.source_path_attr_ident)
+            {
+                attrs.push(create_jsx_attr_with_ident_and_str(
+                    source_path_attr_ident,
+                    source_path,
+                ));
+            }
+        }
+
+        if attrs.is_empty() {
+            return None;
+        }
+
+        Some(ElementAttrs {
+            attrs,
+            insertion_position: if element_policy == ComponentAnnotationPolicy::Transparent {
+                AttributeInsertionPosition::BeforeFirstSpread
+            } else {
+                AttributeInsertionPosition::Append
+            },
+        })
     }
 
     #[inline]
@@ -506,26 +602,6 @@ impl ReactComponentAnnotateVisitor {
 
         let element_name = get_element_name(&opening_element.name);
 
-        // Check if component should be ignored
-        if let Some(ref component_name) = self.current_component_name {
-            if self.should_skip_component_return(component_name) {
-                return;
-            }
-        }
-
-        if self.should_ignore_component(&element_name) {
-            return;
-        }
-
-        let is_ignored_html = self.should_ignore_element(&element_name);
-        let is_transparent_element = self.should_treat_component_as_transparent(&element_name);
-        let can_annotate_element = !is_ignored_html && !is_transparent_element;
-        let owner_component_name = self.current_component_name.as_ref().or_else(|| {
-            is_transparent_element
-                .then_some(())
-                .and_then(|_| self.fragment_child_component_name.as_ref())
-        });
-        let has_owner_component = owner_component_name.is_some();
         let existing_attrs = attribute_presence(
             opening_element,
             &self.component_attr_ident,
@@ -533,72 +609,25 @@ impl ReactComponentAnnotateVisitor {
             &self.source_file_attr_ident,
             self.source_path_attr_ident.as_ref(),
         );
-        let add_element_attr = can_annotate_element
-            && !existing_attrs.element
-            && (self.config.component_attr_name() != self.config.element_attr_name()
-                || !has_owner_component);
-        let add_component_attr = has_owner_component && !existing_attrs.component;
-        let add_source_file_attr = self.source_file_name.is_some()
-            && (has_owner_component || can_annotate_element)
-            && !existing_attrs.source_file;
-        let add_source_path_attr = self.source_file_path.is_some()
-            && self.source_path_attr_ident.is_some()
-            && (has_owner_component || can_annotate_element)
-            && !existing_attrs.source_path;
-
-        let attr_count = usize::from(add_element_attr)
-            + usize::from(add_component_attr)
-            + usize::from(add_source_file_attr)
-            + usize::from(add_source_path_attr);
-
-        let mut attrs = Vec::with_capacity(attr_count);
-
-        if add_element_attr {
-            attrs.push(create_jsx_attr_with_ident(
-                &self.element_attr_ident,
-                &element_name,
-            ));
-        }
-
-        if add_component_attr {
-            if let Some(component_name) = owner_component_name {
-                attrs.push(create_jsx_attr_with_ident(
-                    &self.component_attr_ident,
-                    component_name.as_ref(),
-                ));
-            }
-        }
-
-        if add_source_file_attr {
-            if let Some(ref source_file) = self.source_file_name {
-                attrs.push(create_jsx_attr_with_ident_and_str(
-                    &self.source_file_attr_ident,
-                    source_file,
-                ));
-            }
-        }
-
-        if add_source_path_attr {
-            if let (Some(ref source_path), Some(ref source_path_attr_ident)) =
-                (&self.source_file_path, &self.source_path_attr_ident)
-            {
-                attrs.push(create_jsx_attr_with_ident_and_str(
-                    source_path_attr_ident,
-                    source_path,
-                ));
-            }
-        }
-
-        if attrs.is_empty() {
+        let Some(element_attrs) = self.element_attrs(&element_name, &existing_attrs) else {
             return;
-        }
+        };
 
-        let insert_at = opening_element
-            .attrs
-            .iter()
-            .position(|attr| matches!(attr, JSXAttrOrSpread::SpreadElement(_)))
-            .unwrap_or(opening_element.attrs.len());
-        opening_element.attrs.splice(insert_at..insert_at, attrs);
+        match element_attrs.insertion_position {
+            AttributeInsertionPosition::Append => {
+                opening_element.attrs.extend(element_attrs.attrs);
+            }
+            AttributeInsertionPosition::BeforeFirstSpread => {
+                let insert_at = opening_element
+                    .attrs
+                    .iter()
+                    .position(|attr| matches!(attr, JSXAttrOrSpread::SpreadElement(_)))
+                    .unwrap_or(opening_element.attrs.len());
+                opening_element
+                    .attrs
+                    .splice(insert_at..insert_at, element_attrs.attrs);
+            }
+        }
     }
 
     fn visit_function_as_component(&mut self, func: &mut Function, component_name: Atom) {

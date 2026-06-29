@@ -27,6 +27,10 @@ function LayoutStackUsage() {
   return <LayoutStack />;
 }
 
+function TransparentButtonWithSpread(props) {
+  return <Button {...props} />;
+}
+
 function MergedItem() {
   return (
     <MergedGroup>

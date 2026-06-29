@@ -19,6 +19,9 @@ function CheckoutSummary() {
 function LayoutStackUsage() {
     return <LayoutStack data-component="LayoutStackUsage" data-source-file="test.jsx"/>;
 }
+function TransparentButtonWithSpread(props) {
+    return <Button data-component="TransparentButtonWithSpread" data-source-file="test.jsx" {...props}/>;
+}
 function MergedItem() {
     return <MergedGroup data-element="MergedGroup" data-component="MergedItem" data-source-file="test.jsx">
       <Grid data-component="MergedItem" data-source-file="test.jsx">
