@@ -1,10 +1,13 @@
-import React from 'react';
+import React, { memo } from 'react';
 import styled from '@emotion/styled';
 function ReplayDetails() {
     return <Flex data-component="ReplayDetails" data-source-file="test.jsx"/>;
 }
 function MetricsToolbar() {
     return <Grid data-component="MetricsToolbar" data-source-file="test.jsx"/>;
+}
+function FirstLastSeenSection() {
+    return <Stack data-component="FirstLastSeenSection" data-source-file="test.jsx"/>;
 }
 function CheckoutSummary() {
     return <Stack data-component="CheckoutSummary" data-source-file="test.jsx">
@@ -13,15 +16,30 @@ function CheckoutSummary() {
       <Grid/>
     </Stack>;
 }
-function Flex(props) {
-    return <Container {...props}/>;
+function LayoutStackUsage() {
+    return <LayoutStack data-component="LayoutStackUsage" data-source-file="test.jsx"/>;
 }
-function Stack(props) {
+const Stack = memo(function Stack(props) {
     return <Flex {...props}/>;
-}
-function Container({ as: Component = 'div', ...rest }) {
+});
+const Container = styled(({ as: Component = 'div', ...rest })=>{
     return <Component {...rest}/>;
-}
+}, {
+    shouldForwardProp: (prop)=>prop !== 'as'
+})``;
+const Flex = styled(Container, {
+    shouldForwardProp: (prop)=>prop !== 'direction'
+})``;
+const LayoutStackComponent = styled(({ direction = 'column', ...props })=>{
+    return <React.Fragment>
+      <Flex {...props} direction={direction}/>
+    </React.Fragment>;
+});
+const LayoutStack = Object.assign(LayoutStackComponent, {
+    Separator: styled((props)=>{
+        return <hr {...props}/>;
+    })
+});
 const Grid = styled(Container);
 const StyledFlex = styled((props)=><Container data-element="StyledFlex" data-source-file="test.jsx" {...props}/>);
 function Button() {

@@ -323,6 +323,12 @@ impl ReactComponentAnnotateVisitor {
 
         var_declarator.name.visit_mut_with(self);
 
+        if component_name.as_ref().is_some_and(|component_name| {
+            self.should_skip_component_child_traversal(component_name)
+        }) {
+            return;
+        }
+
         if let Some(init) = &mut var_declarator.init {
             match init.as_mut() {
                 Expr::Call(call_expr) => {

@@ -73,7 +73,7 @@ Add the plugin to your `.swcrc` configuration:
 
 - **`ignored-components`** (array, default: `[]`): List of component names to skip during annotation
 
-- **`transparent-components`** (array, default: `[]`): List of component names that should not add their own element annotations, but should still receive the current component annotation when rendered by another component. This is useful for layout primitives such as `Flex`, `Stack`, `Grid`, or `Container`.
+- **`transparent-components`** (array, default: `[]`): List of pass-through component names that should keep the nearest owning component annotation instead of being reported as their own element. This is intended for uninteresting wrappers such as `Flex`, `Stack`, `Grid`, or `Container`.
 
 - **`component-attr`** (string, optional): Custom component attribute name (overrides default and native setting)
 
@@ -111,18 +111,53 @@ This will generate attributes like:
 </div>
 ```
 
-With `transparent-components`, layout primitives keep the owning component signal without adding noisy element names:
+#### Transparent Components
+
+Use `transparent-components` for components that are implementation detail, not the thing a user is trying to understand or interact with. Layout primitives are the typical case:
 
 ```jsx
-function ReplayDetails() {
-  return <Flex />;
-}
-
-// Output
-function ReplayDetails() {
-  return <Flex data-sentry-component="ReplayDetails" data-sentry-source-file="ReplayDetails.jsx" />;
+function IssueActions() {
+  return (
+    <Flex>
+      <Button>Resolve</Button>
+    </Flex>
+  );
 }
 ```
+
+In this example, `Flex` is layout plumbing. `Button` is the meaningful target. With `Flex` configured as transparent, the layout wrapper keeps the owning component metadata without reporting itself as the element:
+
+```jsx
+function IssueActions() {
+  return (
+    <Flex data-sentry-component="IssueActions" data-sentry-source-file="issueActions.tsx">
+      <Button data-sentry-element="Button" data-sentry-source-file="issueActions.tsx">
+        Resolve
+      </Button>
+    </Flex>
+  );
+}
+```
+
+If a transparent layout component renders a polymorphic DOM element internally, that implementation is not annotated. Forwarded attributes can pass through instead of being overwritten by the layout component's own file:
+
+```jsx
+const Container = memo(function Container({as: Component = 'div', ...props}) {
+  return <Component {...props} />;
+});
+```
+
+The useful result is that layout DOM points at the owner that rendered it, not at `Flex` or `flex.tsx`:
+
+```html
+<div data-sentry-component="IssueActions" data-sentry-source-file="issueActions.tsx">
+  ...
+</div>
+```
+
+Do not use `transparent-components` for components whose name is itself useful context, such as `Button`, `Link`, `Checkbox`, or `MenuItem`. Those components represent meaningful interaction targets. For analytics and debugging, a click should be able to say "the `Button` rendered by `IssueActions` was clicked", not just "something inside `IssueActions` was clicked".
+
+Use `ignored-components` only when a component should not participate in annotation at all. Use `transparent-components` when a wrapper should pass through the nearest useful owner instead.
 
 ## Examples
 

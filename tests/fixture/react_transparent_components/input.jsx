@@ -1,4 +1,4 @@
-import React from 'react';
+import React, {memo} from 'react';
 import styled from '@emotion/styled';
 
 function ReplayDetails() {
@@ -7,6 +7,10 @@ function ReplayDetails() {
 
 function MetricsToolbar() {
   return <Grid />;
+}
+
+function FirstLastSeenSection() {
+  return <Stack />;
 }
 
 function CheckoutSummary() {
@@ -19,17 +23,37 @@ function CheckoutSummary() {
   );
 }
 
-function Flex(props) {
-  return <Container {...props} />;
+function LayoutStackUsage() {
+  return <LayoutStack />;
 }
 
-function Stack(props) {
+const Stack = memo(function Stack(props) {
   return <Flex {...props} />;
-}
+});
 
-function Container({as: Component = 'div', ...rest}) {
+const Container = styled(({as: Component = 'div', ...rest}) => {
   return <Component {...rest} />;
-}
+}, {
+  shouldForwardProp: prop => prop !== 'as',
+})``;
+
+const Flex = styled(Container, {
+  shouldForwardProp: prop => prop !== 'direction',
+})``;
+
+const LayoutStackComponent = styled(({direction = 'column', ...props}) => {
+  return (
+    <React.Fragment>
+      <Flex {...props} direction={direction} />
+    </React.Fragment>
+  );
+});
+
+const LayoutStack = Object.assign(LayoutStackComponent, {
+  Separator: styled(props => {
+    return <hr {...props} />;
+  }),
+});
 
 const Grid = styled(Container);
 const StyledFlex = styled(Container);

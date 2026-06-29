@@ -153,6 +153,7 @@ fn test(input: PathBuf) {
                 "Container".to_string(),
                 "Flex".to_string(),
                 "Grid".to_string(),
+                "LayoutStack".to_string(),
                 "Stack".to_string(),
             ],
             ..Default::default()
