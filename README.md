@@ -54,6 +54,7 @@ Add the plugin to your `.swcrc` configuration:
         ["swc-plugin-component-annotate", {
           "native": false,
           "ignored-components": ["MyIgnoredComponent"],
+          "transparent-components": ["Flex", "Stack"],
           "component-attr": "data-sentry-component",
           "element-attr": "data-sentry-element",
           "source-file-attr": "data-sentry-source-file"
@@ -71,6 +72,8 @@ Add the plugin to your `.swcrc` configuration:
   - `true`: `dataComponent`, `dataElement`, `dataSourceFile`
 
 - **`ignored-components`** (array, default: `[]`): List of component names to skip during annotation
+
+- **`transparent-components`** (array, default: `[]`): List of component names that should not add their own element annotations, but should still receive the current component annotation when rendered by another component. This is useful for layout primitives such as `Flex`, `Stack`, `Grid`, or `Container`.
 
 - **`component-attr`** (string, optional): Custom component attribute name (overrides default and native setting)
 
@@ -90,7 +93,8 @@ To use Sentry-specific attribute names for compatibility with Sentry's tracking:
         ["swc-plugin-component-annotate", {
           "component-attr": "data-sentry-component",
           "element-attr": "data-sentry-element",
-          "source-file-attr": "data-sentry-source-file"
+          "source-file-attr": "data-sentry-source-file",
+          "transparent-components": ["Container", "Flex", "Grid", "Stack"]
         }]
       ]
     }
@@ -105,6 +109,19 @@ This will generate attributes like:
     Click me
   </CustomButton>
 </div>
+```
+
+With `transparent-components`, layout primitives keep the owning component signal without adding noisy element names:
+
+```jsx
+function ReplayDetails() {
+  return <Flex />;
+}
+
+// Output
+function ReplayDetails() {
+  return <Flex data-sentry-component="ReplayDetails" data-sentry-source-file="ReplayDetails.jsx" />;
+}
 ```
 
 ## Examples

@@ -27,6 +27,13 @@ use swc_core::{
     },
 };
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ComponentAnnotationPolicy {
+    Normal,
+    Ignored,
+    Transparent,
+}
+
 pub struct ReactComponentAnnotateVisitor {
     config: PluginConfig,
     source_file_name: Option<Str>,
@@ -36,6 +43,7 @@ pub struct ReactComponentAnnotateVisitor {
     current_return_component_name: Option<Atom>,
     ignored_elements: &'static FxHashSet<&'static str>,
     ignored_components_set: FxHashSet<String>,
+    transparent_components_set: FxHashSet<String>,
     jsx_bindings: JsxBindingTracker,
     fragment_component_identifiers: FxHashSet<Id>,
     react_namespace_identifiers: FxHashSet<Id>,
@@ -63,6 +71,8 @@ impl ReactComponentAnnotateVisitor {
         // Pre-compute ignored components set for O(1) lookups
         let ignored_components_set: FxHashSet<String> =
             config.ignored_components.iter().cloned().collect();
+        let transparent_components_set: FxHashSet<String> =
+            config.transparent_components.iter().cloned().collect();
         let component_attr_ident = IdentName::new(config.component_attr_name().into(), DUMMY_SP);
         let element_attr_ident = IdentName::new(config.element_attr_name().into(), DUMMY_SP);
         let source_file_attr_ident =
@@ -77,6 +87,7 @@ impl ReactComponentAnnotateVisitor {
             element_attr_ident,
             ignored_elements: constants::default_ignored_elements(),
             ignored_components_set,
+            transparent_components_set,
             jsx_bindings: JsxBindingTracker::new(),
             fragment_component_identifiers: FxHashSet::default(),
             react_namespace_identifiers: FxHashSet::default(),
@@ -94,6 +105,32 @@ impl ReactComponentAnnotateVisitor {
     #[inline]
     pub fn should_ignore_component(&self, component_name: &str) -> bool {
         self.ignored_components_set.contains(component_name)
+    }
+
+    #[inline]
+    pub fn should_treat_component_as_transparent(&self, component_name: &str) -> bool {
+        self.transparent_components_set.contains(component_name)
+    }
+
+    #[inline]
+    fn component_annotation_policy(&self, component_name: &str) -> ComponentAnnotationPolicy {
+        if self.should_ignore_component(component_name) {
+            ComponentAnnotationPolicy::Ignored
+        } else if self.should_treat_component_as_transparent(component_name) {
+            ComponentAnnotationPolicy::Transparent
+        } else {
+            ComponentAnnotationPolicy::Normal
+        }
+    }
+
+    #[inline]
+    fn should_skip_component_return(&self, component_name: &str) -> bool {
+        self.component_annotation_policy(component_name) != ComponentAnnotationPolicy::Normal
+    }
+
+    #[inline]
+    fn should_skip_component_child_traversal(&self, component_name: &str) -> bool {
+        self.component_annotation_policy(component_name) == ComponentAnnotationPolicy::Transparent
     }
 
     #[inline]
@@ -294,18 +331,24 @@ impl ReactComponentAnnotateVisitor {
                             component_name.as_ref(),
                             styled_call_component_ref(call_expr, self.styled_import.as_ref()),
                         ) {
-                            transform_styled_call(
-                                call_expr,
-                                ref_component_name,
-                                component_name.clone(),
-                                StyledTransformAttrs {
-                                    element_attr_name: self.config.element_attr_name(),
-                                    source_file: self.source_file_name.as_ref(),
-                                    source_file_attr_ident: &self.source_file_attr_ident,
-                                    source_path: self.source_file_path.as_ref(),
-                                    source_path_attr_ident: self.source_path_attr_ident.as_ref(),
-                                },
-                            );
+                            if self.component_annotation_policy(component_name.as_ref())
+                                == ComponentAnnotationPolicy::Normal
+                            {
+                                transform_styled_call(
+                                    call_expr,
+                                    ref_component_name,
+                                    component_name.clone(),
+                                    StyledTransformAttrs {
+                                        element_attr_name: self.config.element_attr_name(),
+                                        source_file: self.source_file_name.as_ref(),
+                                        source_file_attr_ident: &self.source_file_attr_ident,
+                                        source_path: self.source_file_path.as_ref(),
+                                        source_path_attr_ident: self
+                                            .source_path_attr_ident
+                                            .as_ref(),
+                                    },
+                                );
+                            }
                         }
                     }
                     init.visit_mut_with(self);
@@ -459,7 +502,7 @@ impl ReactComponentAnnotateVisitor {
 
         // Check if component should be ignored
         if let Some(ref component_name) = self.current_component_name {
-            if self.should_ignore_component(component_name.as_ref()) {
+            if self.should_skip_component_return(component_name) {
                 return;
             }
         }
@@ -469,6 +512,9 @@ impl ReactComponentAnnotateVisitor {
         }
 
         let is_ignored_html = self.should_ignore_element(&element_name);
+        let is_transparent_element = self.should_treat_component_as_transparent(&element_name);
+        let can_annotate_element = !is_ignored_html && !is_transparent_element;
+        let has_current_component = self.current_component_name.is_some();
         let existing_attrs = attribute_presence(
             opening_element,
             &self.component_attr_ident,
@@ -476,17 +522,17 @@ impl ReactComponentAnnotateVisitor {
             &self.source_file_attr_ident,
             self.source_path_attr_ident.as_ref(),
         );
-        let add_element_attr = !is_ignored_html
+        let add_element_attr = can_annotate_element
             && !existing_attrs.element
             && (self.config.component_attr_name() != self.config.element_attr_name()
-                || self.current_component_name.is_none());
-        let add_component_attr = self.current_component_name.is_some() && !existing_attrs.component;
+                || !has_current_component);
+        let add_component_attr = has_current_component && !existing_attrs.component;
         let add_source_file_attr = self.source_file_name.is_some()
-            && (self.current_component_name.is_some() || !is_ignored_html)
+            && (has_current_component || can_annotate_element)
             && !existing_attrs.source_file;
         let add_source_path_attr = self.source_file_path.is_some()
             && self.source_path_attr_ident.is_some()
-            && (self.current_component_name.is_some() || !is_ignored_html)
+            && (has_current_component || can_annotate_element)
             && !existing_attrs.source_path;
 
         let attr_count = usize::from(add_element_attr)
@@ -540,6 +586,10 @@ impl ReactComponentAnnotateVisitor {
     }
 
     fn visit_function_as_component(&mut self, func: &mut Function, component_name: Atom) {
+        if self.should_skip_component_child_traversal(component_name.as_ref()) {
+            return;
+        }
+
         let prev_return_component = self.current_return_component_name.replace(component_name);
         let prev_component = self.current_component_name.take();
         let prev_fragment_child_component = self.fragment_child_component_name.take();
@@ -555,6 +605,10 @@ impl ReactComponentAnnotateVisitor {
     }
 
     fn visit_arrow_as_component(&mut self, arrow_expr: &mut ArrowExpr, component_name: Atom) {
+        if self.should_skip_component_child_traversal(component_name.as_ref()) {
+            return;
+        }
+
         let prev_return_component = self.current_return_component_name.replace(component_name);
         let prev_component = self.current_component_name.take();
         let prev_fragment_child_component = self.fragment_child_component_name.take();
@@ -687,6 +741,10 @@ impl VisitMut for ReactComponentAnnotateVisitor {
         let component_name = class_decl.ident.sym.clone();
         self.jsx_bindings
             .insert(class_decl.ident.to_id(), JsxIdentifierStatus::Annotatable);
+
+        if self.should_skip_component_child_traversal(component_name.as_ref()) {
+            return;
+        }
 
         for member in &mut class_decl.class.body {
             match member {

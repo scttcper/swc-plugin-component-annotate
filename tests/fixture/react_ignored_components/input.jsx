@@ -2,6 +2,10 @@ import React from 'react';
 
 // This component should be ignored
 function IgnoredComponent() {
+  function NestedRegularComponent() {
+    return <aside>Nested regular component</aside>;
+  }
+
   return <div>This should not have attributes</div>;
 }
 
@@ -32,4 +36,4 @@ class RegularClassComponent extends React.Component {
   render() {
     return <article>Regular class component</article>;
   }
-} 
+}
