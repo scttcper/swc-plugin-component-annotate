@@ -29,7 +29,7 @@ swc_core = { version = "=71.0.1", features = ["ecma_plugin_transform", "ecma_par
 codegen-units = 1
 lto = true
 # Optimize for size
-opt-level = "s"
+opt-level = "z"
 # Strip debug symbols
 strip = "symbols"
 
