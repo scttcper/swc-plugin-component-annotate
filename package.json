@@ -1,6 +1,6 @@
 {
   "name": "swc-plugin-component-annotate",
-  "version": "1.14.0",
+  "version": "1.15.0",
   "description": "Use SWC to automatically annotate React components with data attributes for component tracking",
   "author": "scttcper <scttcper@gmail.com>",
   "license": "MIT",
@@ -11,6 +11,8 @@
   "scripts": {
     "build": "cargo build --release --target wasm32-unknown-unknown",
     "test": "cargo test",
+    "typecheck": "tsc --noEmit",
+    "test:e2e": "node --test tests/e2e/swc-transform.test.ts",
     "prepack": "cp -rf target/wasm32-unknown-unknown/release/swc_plugin_component_annotate.wasm ."
   },
   "main": "swc_plugin_component_annotate.wasm",
@@ -26,9 +28,12 @@
   "bugs": {
     "url": "https://github.com/scttcper/swc-plugin-component-annotate/issues"
   },
-  "devDependencies": {},
-  "peerDependencies": {},
-  "packageManager": "pnpm@10.18.3",
+  "devDependencies": {
+    "@swc/core": "1.15.43",
+    "@types/node": "26.0.1",
+    "typescript": "7.0.1-rc"
+  },
+  "packageManager": "pnpm@11.9.0",
   "release": {
     "branches": [
       "main"
