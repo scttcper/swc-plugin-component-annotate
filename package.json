@@ -30,7 +30,7 @@
   },
   "devDependencies": {
     "@swc/core": "1.15.43",
-    "@types/node": "26.0.1",
+    "@types/node": "26.1.0",
     "typescript": "7.0.1-rc"
   },
   "packageManager": "pnpm@11.9.0",

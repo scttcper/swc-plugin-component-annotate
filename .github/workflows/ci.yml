@@ -34,9 +34,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: wasm32-unknown-unknown
+        run: rustup show
 
       - name: Cache Cargo
         uses: actions/cache@v6
