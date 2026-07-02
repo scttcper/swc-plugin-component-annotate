@@ -3,6 +3,7 @@
     "target": "es2024",
     "module": "preserve",
     "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
     "types": ["node"],
     "strict": true,
     "noEmit": true,
