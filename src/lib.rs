@@ -54,6 +54,10 @@ pub struct ReactComponentAnnotateVisitor {
     current_component_name: Option<Atom>,
     fragment_child_component_name: Option<Atom>,
     current_return_component_name: Option<Atom>,
+    /// Owner for a render-root JSX element that the React Compiler hoisted out
+    /// of `return` into a memo-cache assignment (`t = <jsx>`), where
+    /// `visit_component_return_expr` no longer sees it.
+    render_root_owner: Option<Atom>,
     ignored_elements: &'static FxHashSet<&'static str>,
     ignored_components_set: FxHashSet<String>,
     transparent_components_set: FxHashSet<String>,
@@ -111,6 +115,7 @@ impl ReactComponentAnnotateVisitor {
             current_component_name: None,
             fragment_child_component_name: None,
             current_return_component_name: None,
+            render_root_owner: None,
             styled_import: None,
         }
     }
@@ -172,9 +177,11 @@ impl ReactComponentAnnotateVisitor {
         let can_annotate_element = !self.should_ignore_element(element_name)
             && element_policy == ComponentAnnotationPolicy::Normal;
         let owner_component_name = self.current_component_name.as_ref().or_else(|| {
-            (element_policy == ComponentAnnotationPolicy::Transparent)
-                .then_some(())
-                .and_then(|_| self.fragment_child_component_name.as_ref())
+            if element_policy == ComponentAnnotationPolicy::Transparent {
+                self.fragment_child_component_name.as_ref()
+            } else {
+                None
+            }
         });
         let has_owner_component = owner_component_name.is_some();
 
@@ -546,7 +553,33 @@ impl ReactComponentAnnotateVisitor {
         }
     }
 
+    /// Adopt a pending `render_root_owner` as the owner of this JSX root (see
+    /// the field docs). Taken for the duration so nested children aren't
+    /// mistaken for roots; pass the returned state to `restore_render_root`.
+    fn adopt_render_root(&mut self) -> (Option<Atom>, Option<Option<Atom>>) {
+        let root_owner = self.render_root_owner.take();
+        let restore_component = if self.current_component_name.is_none() {
+            root_owner
+                .as_ref()
+                .map(|owner| self.current_component_name.replace(owner.clone()))
+        } else {
+            None
+        };
+        (root_owner, restore_component)
+    }
+
+    fn restore_render_root(&mut self, state: (Option<Atom>, Option<Option<Atom>>)) {
+        let (root_owner, restore_component) = state;
+        if let Some(prev_component) = restore_component {
+            self.current_component_name = prev_component;
+        }
+        // Restore so sibling roots on the same render spine are still adopted.
+        self.render_root_owner = root_owner;
+    }
+
     fn process_jsx_element(&mut self, element: &mut JSXElement) {
+        let render_root = self.adopt_render_root();
+
         // Check if this is a named fragment (Fragment, React.Fragment, or aliases)
         let is_fragment = self.is_react_fragment_element_name(&element.opening.name);
 
@@ -559,10 +592,14 @@ impl ReactComponentAnnotateVisitor {
         } else {
             self.visit_element_jsx_children(element);
         }
+
+        self.restore_render_root(render_root);
     }
 
     fn process_jsx_fragment(&mut self, fragment: &mut JSXFragment) {
+        let render_root = self.adopt_render_root();
         self.visit_fragment_jsx_children(fragment);
+        self.restore_render_root(render_root);
     }
 
     fn visit_fragment_jsx_children<N>(&mut self, node: &mut N)
@@ -638,6 +675,8 @@ impl ReactComponentAnnotateVisitor {
         let prev_return_component = self.current_return_component_name.replace(component_name);
         let prev_component = self.current_component_name.take();
         let prev_fragment_child_component = self.fragment_child_component_name.take();
+        let prev_render_root = self.render_root_owner.clone();
+        self.render_root_owner = self.current_return_component_name.clone();
 
         self.jsx_bindings
             .push_function_with(collect_function_param_scope(&func.params));
@@ -647,6 +686,7 @@ impl ReactComponentAnnotateVisitor {
         self.current_return_component_name = prev_return_component;
         self.current_component_name = prev_component;
         self.fragment_child_component_name = prev_fragment_child_component;
+        self.render_root_owner = prev_render_root;
     }
 
     fn visit_arrow_as_component(&mut self, arrow_expr: &mut ArrowExpr, component_name: Atom) {
@@ -657,6 +697,8 @@ impl ReactComponentAnnotateVisitor {
         let prev_return_component = self.current_return_component_name.replace(component_name);
         let prev_component = self.current_component_name.take();
         let prev_fragment_child_component = self.fragment_child_component_name.take();
+        let prev_render_root = self.render_root_owner.clone();
+        self.render_root_owner = self.current_return_component_name.clone();
 
         self.jsx_bindings
             .push_function_with(collect_pat_list_scope(&arrow_expr.params));
@@ -675,6 +717,7 @@ impl ReactComponentAnnotateVisitor {
         self.current_return_component_name = prev_return_component;
         self.current_component_name = prev_component;
         self.fragment_child_component_name = prev_fragment_child_component;
+        self.render_root_owner = prev_render_root;
     }
 
     fn visit_component_return_expr(&mut self, expr: &mut Expr) {
@@ -760,13 +803,21 @@ impl VisitMut for ReactComponentAnnotateVisitor {
         let component_name = func_decl.ident.sym.clone();
         self.jsx_bindings
             .insert(func_decl.ident.to_id(), JsxIdentifierStatus::Annotatable);
-        self.visit_function_as_component(&mut func_decl.function, component_name);
+
+        // React Compiler helpers (`_temp`, `_temp2`, ...) are extracted inline
+        // callbacks, not components; traverse without attributing their JSX.
+        if is_react_compiler_temp(component_name.as_ref()) {
+            self.visit_mut_function(&mut func_decl.function);
+        } else {
+            self.visit_function_as_component(&mut func_decl.function, component_name);
+        }
     }
 
     fn visit_mut_function(&mut self, function: &mut Function) {
         let prev_return_component = self.current_return_component_name.take();
         let prev_component = self.current_component_name.take();
         let prev_fragment_child_component = self.fragment_child_component_name.take();
+        let prev_render_root = self.render_root_owner.take();
 
         self.jsx_bindings
             .push_function_with(collect_function_param_scope(&function.params));
@@ -776,6 +827,7 @@ impl VisitMut for ReactComponentAnnotateVisitor {
         self.current_return_component_name = prev_return_component;
         self.current_component_name = prev_component;
         self.fragment_child_component_name = prev_fragment_child_component;
+        self.render_root_owner = prev_render_root;
     }
 
     fn visit_mut_var_decl(&mut self, var_decl: &mut VarDecl) {
@@ -849,6 +901,7 @@ impl VisitMut for ReactComponentAnnotateVisitor {
         let prev_return_component = self.current_return_component_name.take();
         let prev_component = self.current_component_name.take();
         let prev_fragment_child_component = self.fragment_child_component_name.take();
+        let prev_render_root = self.render_root_owner.take();
 
         self.jsx_bindings
             .push_function_with(collect_pat_list_scope(&arrow_expr.params));
@@ -858,6 +911,7 @@ impl VisitMut for ReactComponentAnnotateVisitor {
         self.current_return_component_name = prev_return_component;
         self.current_component_name = prev_component;
         self.fragment_child_component_name = prev_fragment_child_component;
+        self.render_root_owner = prev_render_root;
     }
 
     fn visit_mut_return_stmt(&mut self, return_stmt: &mut ReturnStmt) {
@@ -873,6 +927,14 @@ impl VisitMut for ReactComponentAnnotateVisitor {
     fn visit_mut_jsx_fragment(&mut self, jsx_fragment: &mut JSXFragment) {
         self.process_jsx_fragment(jsx_fragment);
     }
+}
+
+/// Matches the module-scope helper names the React Compiler generates when it
+/// extracts inline callbacks / render closures (`_temp`, `_temp2`, ...).
+#[inline]
+fn is_react_compiler_temp(name: &str) -> bool {
+    name.strip_prefix("_temp")
+        .is_some_and(|rest| rest.bytes().all(|byte| byte.is_ascii_digit()))
 }
 
 // Export for testing
