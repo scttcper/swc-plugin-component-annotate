@@ -161,7 +161,9 @@ impl ReactComponentAnnotateVisitor {
     fn element_attrs(
         &self,
         element_name: &str,
+        element_policy: ComponentAnnotationPolicy,
         existing_attrs: &AttributePresence,
+        transparent_owner_component_name: Option<&Atom>,
     ) -> Option<ElementAttrs> {
         if let Some(ref component_name) = self.current_component_name {
             if self.should_skip_component_return(component_name) {
@@ -169,20 +171,17 @@ impl ReactComponentAnnotateVisitor {
             }
         }
 
-        let element_policy = self.component_annotation_policy(element_name);
         if element_policy == ComponentAnnotationPolicy::Ignored {
             return None;
         }
 
         let can_annotate_element = !self.should_ignore_element(element_name)
             && element_policy == ComponentAnnotationPolicy::Normal;
-        let owner_component_name = self.current_component_name.as_ref().or_else(|| {
-            if element_policy == ComponentAnnotationPolicy::Transparent {
-                self.fragment_child_component_name.as_ref()
-            } else {
-                None
-            }
-        });
+        let owner_component_name = if element_policy == ComponentAnnotationPolicy::Transparent {
+            transparent_owner_component_name
+        } else {
+            self.current_component_name.as_ref()
+        };
         let has_owner_component = owner_component_name.is_some();
 
         let mut attrs = Vec::with_capacity(4);
@@ -239,6 +238,20 @@ impl ReactComponentAnnotateVisitor {
                 AttributeInsertionPosition::Append
             },
         })
+    }
+
+    fn transparent_owner_component_name(&self, element_name: &str) -> Option<Atom> {
+        let owner_component_name = self
+            .current_component_name
+            .as_ref()
+            .or(self.fragment_child_component_name.as_ref())?;
+        let owner_component_name = owner_component_name.as_ref();
+        let mut transparent_owner =
+            String::with_capacity(owner_component_name.len() + 1 + element_name.len());
+        transparent_owner.push_str(owner_component_name);
+        transparent_owner.push('-');
+        transparent_owner.push_str(element_name);
+        Some(transparent_owner.into())
     }
 
     #[inline]
@@ -638,6 +651,13 @@ impl ReactComponentAnnotateVisitor {
         }
 
         let element_name = get_element_name(&opening_element.name);
+        let element_policy = self.component_annotation_policy(&element_name);
+        let transparent_owner_component_name =
+            if element_policy == ComponentAnnotationPolicy::Transparent {
+                self.transparent_owner_component_name(&element_name)
+            } else {
+                None
+            };
 
         let existing_attrs = attribute_presence(
             opening_element,
@@ -646,7 +666,12 @@ impl ReactComponentAnnotateVisitor {
             &self.source_file_attr_ident,
             self.source_path_attr_ident.as_ref(),
         );
-        let Some(element_attrs) = self.element_attrs(&element_name, &existing_attrs) else {
+        let Some(element_attrs) = self.element_attrs(
+            &element_name,
+            element_policy,
+            &existing_attrs,
+            transparent_owner_component_name.as_ref(),
+        ) else {
             return;
         };
 

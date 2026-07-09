@@ -64,7 +64,9 @@ test("passes owner metadata through transparent component callsites", () => {
     {...sentryConfig, "transparent-components": ["Button", "Flex", "Grid"]}
   );
 
-  assert.match(code, /React\.createElement\(Button, \{\s+"aria-label": "Show fingerprints",\s+"data-sentry-component": "MergedItem"/);
+  assert.match(code, /React\.createElement\(Grid, \{\s+"data-sentry-component": "MergedItem-Grid"/);
+  assert.match(code, /React\.createElement\(Flex, \{\s+"data-sentry-component": "MergedItem-Flex"/);
+  assert.match(code, /React\.createElement\(Button, \{\s+"aria-label": "Show fingerprints",\s+"data-sentry-component": "MergedItem-Button"/);
   assert.doesNotMatch(code, /"data-sentry-element": "Button"/);
   assert.match(code, /React\.createElement\("button", props\)/);
 });

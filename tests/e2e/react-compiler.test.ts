@@ -30,7 +30,8 @@ test("passes owner metadata through transparent component callsites with React C
     reactCompiler
   );
 
-  assert.match(code, /_jsx\(Button, \{\s+"aria-label": "Show fingerprints",\s+"data-sentry-component": "MergedItem"/);
+  assert.match(code, /_jsx\(Grid, \{\s+"data-sentry-component": "MergedItem-Grid"/);
+  assert.match(code, /_jsx\(Button, \{\s+"aria-label": "Show fingerprints",\s+"data-sentry-component": "MergedItem-Button"/);
   assert.doesNotMatch(code, /"data-sentry-element": "Button"/);
   assert.match(code, /_jsx\("button", _object_spread\(\{\}, props\)\)/);
 });
@@ -68,7 +69,7 @@ test("annotates nested cached React Compiler return values", () => {
     reactCompiler
   );
 
-  assert.match(code, /_jsx\(Button, \{\s+"data-sentry-component": "ConditionalActions"/);
+  assert.match(code, /_jsx\(Button, \{\s+"data-sentry-component": "ConditionalActions-Button"/);
   assert.match(code, /_jsx\("div", \{\s+"data-sentry-component": "ConditionalActions"/);
   assert.doesNotMatch(code, /"data-sentry-element": "Button"/);
 });
