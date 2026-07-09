@@ -1117,8 +1117,6 @@ impl VisitMut for ReactComponentAnnotateVisitor {
     }
 
     fn visit_mut_import_decl(&mut self, import_decl: &mut ImportDecl) {
-        self.register_react_imports(import_decl);
-
         // Track imports from @emotion/styled (only if enabled)
         if self.config.experimental_rewrite_emotion_styled
             && import_decl.src.value == "@emotion/styled"
@@ -1307,11 +1305,6 @@ impl VisitMut for ReactComponentAnnotateVisitor {
 fn is_react_compiler_temp(name: &str) -> bool {
     name.strip_prefix("_temp")
         .is_some_and(|rest| rest.bytes().all(|byte| byte.is_ascii_digit()))
-}
-
-// Export for testing
-pub fn extract_filename_for_test(filename: &FileName) -> Option<String> {
-    extract_filename(filename)
 }
 
 #[plugin_transform]
