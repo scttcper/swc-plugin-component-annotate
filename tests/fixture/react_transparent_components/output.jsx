@@ -1,36 +1,36 @@
 import React, { memo } from 'react';
 import styled from '@emotion/styled';
 function ReplayDetails() {
-    return <Flex data-component="ReplayDetails" data-source-file="test.jsx"/>;
+    return <Flex data-component="ReplayDetails-Flex" data-source-file="test.jsx"/>;
 }
 function MetricsToolbar() {
-    return <Grid data-component="MetricsToolbar" data-source-file="test.jsx"/>;
+    return <Grid data-component="MetricsToolbar-Grid" data-source-file="test.jsx"/>;
 }
 function FirstLastSeenSection() {
-    return <Stack data-component="FirstLastSeenSection" data-source-file="test.jsx"/>;
+    return <Stack data-component="FirstLastSeenSection-Stack" data-source-file="test.jsx"/>;
 }
 function CheckoutSummary() {
-    return <Stack data-component="CheckoutSummary" data-source-file="test.jsx">
-      <Button data-component="CheckoutSummary" data-source-file="test.jsx"/>
+    return <Stack data-component="CheckoutSummary-Stack" data-source-file="test.jsx">
+      <Button data-component="CheckoutSummary-Button" data-source-file="test.jsx"/>
       <StyledFlex data-element="StyledFlex" data-source-file="test.jsx"/>
-      <Grid data-component="CheckoutSummary" data-source-file="test.jsx"/>
+      <Grid data-component="CheckoutSummary-Grid" data-source-file="test.jsx"/>
     </Stack>;
 }
 function LayoutStackUsage() {
-    return <LayoutStack data-component="LayoutStackUsage" data-source-file="test.jsx"/>;
+    return <LayoutStack data-component="LayoutStackUsage-LayoutStack" data-source-file="test.jsx"/>;
 }
 function TransparentButtonWithSpread(props) {
-    return <Button data-component="TransparentButtonWithSpread" data-source-file="test.jsx" {...props}/>;
+    return <Button data-component="TransparentButtonWithSpread-Button" data-source-file="test.jsx" {...props}/>;
 }
 function MergedItem() {
     return <MergedGroup data-element="MergedGroup" data-component="MergedItem" data-source-file="test.jsx">
-      <Grid data-component="MergedItem" data-source-file="test.jsx">
-        <Flex data-component="MergedItem" data-source-file="test.jsx">
-          <Text data-component="MergedItem" data-source-file="test.jsx">
-            <Link data-component="MergedItem" data-source-file="test.jsx">Latest event</Link>
+      <Grid data-component="MergedItem-Grid" data-source-file="test.jsx">
+        <Flex data-component="MergedItem-Flex" data-source-file="test.jsx">
+          <Text data-component="MergedItem-Text" data-source-file="test.jsx">
+            <Link data-component="MergedItem-Link" data-source-file="test.jsx">Latest event</Link>
           </Text>
         </Flex>
-        <Button aria-label="Show fingerprints" data-component="MergedItem" data-source-file="test.jsx"/>
+        <Button aria-label="Show fingerprints" data-component="MergedItem-Button" data-source-file="test.jsx"/>
       </Grid>
     </MergedGroup>;
 }

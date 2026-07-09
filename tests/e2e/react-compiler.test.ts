@@ -30,9 +30,221 @@ test("passes owner metadata through transparent component callsites with React C
     reactCompiler
   );
 
-  assert.match(code, /_jsx\(Button, \{\s+"aria-label": "Show fingerprints",\s+"data-sentry-component": "MergedItem"/);
+  assert.match(code, /_jsx\(Grid, \{\s+"data-sentry-component": "MergedItem-Grid"/);
+  assert.match(code, /_jsx\(Button, \{\s+"aria-label": "Show fingerprints",\s+"data-sentry-component": "MergedItem-Button"/);
   assert.doesNotMatch(code, /"data-sentry-element": "Button"/);
   assert.match(code, /_jsx\("button", _object_spread\(\{\}, props\)\)/);
+});
+
+test("attributes transparent callsites owned by memo components", () => {
+  const source = `
+    import React, {memo} from "react";
+
+    const MemoActions = memo(function MemoActions() {
+      return <Button />;
+    });
+
+    const NamespaceMemoActions = React.memo(function NamespaceMemoActions() {
+      return <Button />;
+    });
+
+    function Button(props) {
+      return <button {...props} />;
+    }
+  `;
+
+  for (const [runtime, swcOptions] of [
+    ["classic", {}],
+    ["react compiler", reactCompiler],
+  ] as const) {
+    const code = transform(
+      source,
+      {...sentryConfig, "transparent-components": ["Button"]},
+      swcOptions
+    );
+
+    assert.match(
+      code,
+      /"data-sentry-component": "MemoActions-Button"/,
+      `${runtime} should keep the memo component as the transparent owner`
+    );
+    assert.match(
+      code,
+      /"data-sentry-component": "NamespaceMemoActions-Button"/,
+      `${runtime} should keep the React.memo component as the transparent owner`
+    );
+  }
+});
+
+test("supports transparent memo owners in CommonJS scripts", () => {
+  const code = transform(
+    `
+      const React = require("react");
+
+      const MemoActions = React.memo(function MemoActions() {
+        return <Grid />;
+      });
+
+      function Grid(props) {
+        return <div {...props} />;
+      }
+
+      module.exports = MemoActions;
+    `,
+    {...sentryConfig, "transparent-components": ["Grid"]},
+    {...reactCompiler, isModule: false}
+  );
+
+  assert.match(code, /"data-sentry-component": "MemoActions-Grid"/);
+});
+
+test("does not treat non-return JSX as a React Compiler render root", () => {
+  const code = transform(
+    `
+      function App() {
+        register(<Grid />);
+        return <div />;
+      }
+
+      function Grid(props) {
+        return <div {...props} />;
+      }
+    `,
+    {...sentryConfig, "transparent-components": ["Grid"]},
+    reactCompiler
+  );
+
+  assert.match(code, /register\([\s\S]*?_jsx\(Grid,/);
+  assert.doesNotMatch(code, /"data-sentry-component": "App-Grid"/);
+});
+
+test("does not treat a later reassignment as a returned render root", () => {
+  const code = transform(
+    `
+      function App({notify}) {
+        let value = <Grid />;
+        const root = value;
+        value = <Button />;
+        notify(value);
+        return root;
+      }
+
+      function Grid(props) {
+        return <div {...props} />;
+      }
+
+      function Button(props) {
+        return <button {...props} />;
+      }
+    `,
+    {...sentryConfig, "transparent-components": ["Button", "Grid"]},
+    reactCompiler
+  );
+
+  assert.match(code, /"data-sentry-component": "App-Grid"/);
+  assert.doesNotMatch(code, /"data-sentry-component": "App-Button"/);
+});
+
+test("attributes React Compiler cache values forwarded through a returned local", () => {
+  const code = transform(
+    `
+      function App({ready}) {
+        let root;
+        if (ready) {
+          root = (
+            <Grid>
+              <Button />
+            </Grid>
+          );
+        }
+        return root;
+      }
+
+      function Grid(props) {
+        return <div {...props} />;
+      }
+
+      function Button(props) {
+        return <button {...props} />;
+      }
+    `,
+    {...sentryConfig, "transparent-components": ["Button", "Grid"]},
+    reactCompiler
+  );
+
+  assert.match(code, /"data-sentry-component": "App-Grid"/);
+  assert.match(code, /"data-sentry-component": "App-Button"/);
+});
+
+test("attributes React Compiler cache values selected by a returned conditional", () => {
+  const code = transform(
+    `
+      function App({ready}) {
+        let root;
+        const first = <Grid />;
+        const second = <Button />;
+        root = ready ? first : second;
+        return root;
+      }
+
+      function Grid(props) {
+        return <div {...props} />;
+      }
+
+      function Button(props) {
+        return <button {...props} />;
+      }
+    `,
+    {...sentryConfig, "transparent-components": ["Button", "Grid"]},
+    reactCompiler
+  );
+
+  assert.match(code, /"data-sentry-component": "App-Grid"/);
+  assert.match(code, /"data-sentry-component": "App-Button"/);
+});
+
+test("attributes React Compiler cache values used by a logical return", () => {
+  const code = transform(
+    `
+      function App({ready}) {
+        const first = <Grid />;
+        const root = ready && first;
+        return root;
+      }
+
+      function Grid(props) {
+        return <div {...props} />;
+      }
+    `,
+    {...sentryConfig, "transparent-components": ["Grid"]},
+    reactCompiler
+  );
+
+  assert.match(code, /"data-sentry-component": "App-Grid"/);
+});
+
+test("attributes separately cached JSX children", () => {
+  const code = transform(
+    `
+      function App({label}) {
+        const button = <Button />;
+        return <Grid label={label}>{button}</Grid>;
+      }
+
+      function Grid(props) {
+        return <div {...props} />;
+      }
+
+      function Button(props) {
+        return <button {...props} />;
+      }
+    `,
+    {...sentryConfig, "transparent-components": ["Button", "Grid"]},
+    reactCompiler
+  );
+
+  assert.match(code, /"data-sentry-component": "App-Grid"/);
+  assert.match(code, /"data-sentry-component": "App-Button"/);
 });
 
 test("annotates cached React Compiler return values", () => {
@@ -68,7 +280,7 @@ test("annotates nested cached React Compiler return values", () => {
     reactCompiler
   );
 
-  assert.match(code, /_jsx\(Button, \{\s+"data-sentry-component": "ConditionalActions"/);
+  assert.match(code, /_jsx\(Button, \{\s+"data-sentry-component": "ConditionalActions-Button"/);
   assert.match(code, /_jsx\("div", \{\s+"data-sentry-component": "ConditionalActions"/);
   assert.doesNotMatch(code, /"data-sentry-element": "Button"/);
 });

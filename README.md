@@ -73,7 +73,7 @@ Add the plugin to your `.swcrc` configuration:
 
 - **`ignored-components`** (array, default: `[]`): List of component names to skip during annotation
 
-- **`transparent-components`** (array, default: `[]`): List of pass-through component names that should keep the nearest owning component annotation instead of being reported as their own element. This is useful for layout primitives such as `Flex`, `Stack`, `Grid`, or `Container`, and for design-system primitives when owner-only DOM annotations are preferred.
+- **`transparent-components`** (array, default: `[]`): List of pass-through component names that should receive an `Owner-Component` annotation instead of being reported as their own element. This is useful for layout primitives such as `Flex`, `Stack`, `Grid`, or `Container`, and for design-system primitives when caller context is preferred.
 
 - **`component-attr`** (string, optional): Custom component attribute name (overrides default and native setting)
 
@@ -125,12 +125,12 @@ function IssueActions() {
 }
 ```
 
-In this example, `Flex` is layout plumbing. With `Flex` configured as transparent, the layout wrapper keeps the owning component metadata without reporting itself as the element:
+In this example, `Flex` is layout plumbing. With `Flex` configured as transparent, the layout wrapper records both its owner and its own callsite name without reporting itself as the element:
 
 ```jsx
 function IssueActions() {
   return (
-    <Flex data-sentry-component="IssueActions" data-sentry-source-file="issueActions.tsx">
+    <Flex data-sentry-component="IssueActions-Flex" data-sentry-source-file="issueActions.tsx">
       <Button data-sentry-element="Button" data-sentry-source-file="issueActions.tsx">
         Resolve
       </Button>
@@ -139,13 +139,13 @@ function IssueActions() {
 }
 ```
 
-If the React component `Button` is also configured as transparent, its annotation intentionally collapses to the owner:
+If the React component `Button` is also configured as transparent, it gets the same root owner with its own component name. Transparent wrappers do not accumulate in nested labels:
 
 ```jsx
 function IssueActions() {
   return (
-    <Flex data-sentry-component="IssueActions" data-sentry-source-file="issueActions.tsx">
-      <Button data-sentry-component="IssueActions" data-sentry-source-file="issueActions.tsx">
+    <Flex data-sentry-component="IssueActions-Flex" data-sentry-source-file="issueActions.tsx">
+      <Button data-sentry-component="IssueActions-Button" data-sentry-source-file="issueActions.tsx">
         Resolve
       </Button>
     </Flex>
@@ -163,15 +163,15 @@ const Container = memo(function Container({as: Component = 'div', ...props}) {
 });
 ```
 
-The useful result is that layout DOM points at the owner that rendered it, not at `Flex` or `flex.tsx`:
+The useful result is that layout DOM retains both the owner and the transparent callsite, rather than pointing at `Flex` or `flex.tsx` alone:
 
 ```html
-<div data-sentry-component="IssueActions" data-sentry-source-file="issueActions.tsx">
+<div data-sentry-component="IssueActions-Flex" data-sentry-source-file="issueActions.tsx">
   ...
 </div>
 ```
 
-Whether to include components such as `Button`, `Link`, `Checkbox`, or `MenuItem` depends on the signal you want in the DOM. Leave them out of `transparent-components` when their component name is useful context, for example "the `Button` rendered by `IssueActions`". Include them when the owning component is the preferred label everywhere, for example "the `IssueActions` UI rendered this DOM node".
+Whether to include components such as `Button`, `Link`, `Checkbox`, or `MenuItem` depends on the signal you want in the DOM. Leave them out of `transparent-components` when their component name should be reported as an element. Include them when the combined label is more useful, for example `IssueActions-Button`.
 
 Use `ignored-components` only when a component should not participate in annotation at all. Ignored components get no generated attributes. Use `transparent-components` when a component should still receive useful owner metadata, but should not report itself as `data-sentry-element`.
 
