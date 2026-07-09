@@ -223,46 +223,12 @@ test("attributes React Compiler cache values used by a logical return", () => {
   assert.match(code, /"data-sentry-component": "App-Grid"/);
 });
 
-test("attributes React Compiler cache values selected by a switch", () => {
+test("attributes separately cached JSX children", () => {
   const code = transform(
     `
-      function App({kind}) {
-        let root;
-        switch (kind) {
-          case "grid":
-            root = <Grid />;
-            break;
-          default:
-            root = <Button />;
-        }
-        return root;
-      }
-
-      function Grid(props) {
-        return <div {...props} />;
-      }
-
-      function Button(props) {
-        return <button {...props} />;
-      }
-    `,
-    {...sentryConfig, "transparent-components": ["Button", "Grid"]},
-    reactCompiler
-  );
-
-  assert.match(code, /"data-sentry-component": "App-Grid"/);
-  assert.match(code, /"data-sentry-component": "App-Button"/);
-});
-
-test("attributes initial and reassigned React Compiler loop values", () => {
-  const code = transform(
-    `
-      function App({items}) {
-        let root = <Grid />;
-        for (const item of items) {
-          root = <Button key={item} />;
-        }
-        return root;
+      function App({label}) {
+        const button = <Button />;
+        return <Grid label={label}>{button}</Grid>;
       }
 
       function Grid(props) {

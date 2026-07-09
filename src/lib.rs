@@ -48,13 +48,6 @@ struct ElementAttrs {
 }
 
 type DefinitionId = usize;
-type ReachingDefinitions = FxHashMap<Id, FxHashSet<DefinitionId>>;
-type ReachingDefinitionChanges = FxHashMap<Id, Option<FxHashSet<DefinitionId>>>;
-
-struct BranchDefinitions {
-    changed: ReachingDefinitions,
-    reachable: bool,
-}
 
 #[derive(Default)]
 struct ReturnRootDefinitions {
@@ -75,211 +68,139 @@ impl ReturnRootDefinitions {
     }
 }
 
-// React Compiler caches JSX in local definitions before returning it. Track
-// the exact reaching definitions so a later reassignment of the same binding
-// does not become part of an earlier returned value.
+struct Definition {
+    sources: Vec<Id>,
+    contains_jsx: bool,
+}
+
+// React Compiler caches JSX in local definitions before returning it. Resolve
+// aliases to the latest earlier definition that contains JSX or forwards
+// another identifier. Cache restore assignments such as `t1 = $[0]` are not
+// value origins and are intentionally skipped.
 #[derive(Default)]
 struct ReturnRootDefinitionCollector {
-    reaching: ReachingDefinitions,
-    definition_sources: Vec<FxHashSet<DefinitionId>>,
-    returned_definitions: FxHashSet<DefinitionId>,
-    break_environments: Vec<Vec<ReachingDefinitions>>,
-    reaching_changes: Vec<ReachingDefinitionChanges>,
-    reachable: bool,
+    definitions: Vec<Definition>,
+    definitions_by_binding: FxHashMap<Id, Vec<DefinitionId>>,
+    returned_values: Vec<(Id, DefinitionId)>,
 }
 
 impl ReturnRootDefinitionCollector {
-    fn new() -> Self {
-        Self {
-            reachable: true,
-            ..Self::default()
-        }
-    }
-
-    fn reserve_definition(&mut self) -> DefinitionId {
-        let definition = self.definition_sources.len();
-        self.definition_sources.push(FxHashSet::default());
-        definition
-    }
-
-    fn value_definitions(&self, value: &Expr) -> FxHashSet<DefinitionId> {
-        let mut definitions = FxHashSet::default();
-        visit_value_source_identifiers(value, &mut |source| {
-            if let Some(reaching) = self.reaching.get(&source.to_id()) {
-                definitions.extend(reaching);
-            }
+    fn add_definition(&mut self, target: &BindingIdent, value: &Expr) {
+        let id = self.definitions.len();
+        let mut sources = Vec::new();
+        let contains_jsx = collect_value_sources(value, &mut sources);
+        self.definitions.push(Definition {
+            sources,
+            contains_jsx,
         });
-        definitions
+        self.definitions_by_binding
+            .entry(target.id.to_id())
+            .or_default()
+            .push(id);
     }
 
-    fn record_definition(&mut self, definition: DefinitionId, target: &BindingIdent, value: &Expr) {
-        if !self.reachable {
+    fn add_returned_value(&mut self, value: &Expr) {
+        let before = self.definitions.len();
+        let mut sources = Vec::new();
+        collect_value_sources(value, &mut sources);
+        self.returned_values
+            .extend(sources.into_iter().map(|source| (source, before)));
+    }
+
+    fn resolve(&self, binding: &Id, before: DefinitionId, roots: &mut FxHashSet<DefinitionId>) {
+        let Some(definition) = self
+            .definitions_by_binding
+            .get(binding)
+            .and_then(|definitions| {
+                definitions.iter().rev().copied().find(|definition| {
+                    *definition < before
+                        && (self.definitions[*definition].contains_jsx
+                            || !self.definitions[*definition].sources.is_empty())
+                })
+            })
+        else {
+            return;
+        };
+
+        if !roots.insert(definition) {
             return;
         }
-
-        self.definition_sources[definition] = self.value_definitions(value);
-        self.set_reaching(target.id.to_id(), std::iter::once(definition).collect());
-    }
-
-    fn set_reaching(&mut self, binding: Id, definitions: FxHashSet<DefinitionId>) {
-        let previous = self.reaching.get(&binding).cloned();
-        if let Some(changes) = self.reaching_changes.last_mut() {
-            changes.entry(binding.clone()).or_insert(previous);
+        for source in &self.definitions[definition].sources {
+            self.resolve(source, definition, roots);
         }
-        self.reaching.insert(binding, definitions);
-    }
-
-    fn begin_branch(&mut self) {
-        self.reaching_changes
-            .push(ReachingDefinitionChanges::default());
-    }
-
-    fn finish_branch(&mut self) -> BranchDefinitions {
-        let changes = self.reaching_changes.pop().unwrap_or_default();
-        let mut changed = ReachingDefinitions::default();
-
-        for (binding, previous) in changes {
-            if let Some(definitions) = self.reaching.get(&binding) {
-                changed.insert(binding.clone(), definitions.clone());
-            }
-
-            match previous {
-                Some(definitions) => {
-                    self.reaching.insert(binding, definitions);
-                }
-                None => {
-                    self.reaching.remove(&binding);
-                }
-            }
-        }
-
-        BranchDefinitions {
-            changed,
-            reachable: self.reachable,
-        }
-    }
-
-    fn merge_branches(&mut self, consequent: BranchDefinitions, alternate: BranchDefinitions) {
-        let mut changed_bindings: FxHashSet<_> = consequent.changed.keys().cloned().collect();
-        changed_bindings.extend(alternate.changed.keys().cloned());
-
-        for binding in changed_bindings {
-            let mut definitions = FxHashSet::default();
-            if consequent.reachable {
-                if let Some(changed) = consequent.changed.get(&binding) {
-                    definitions.extend(changed);
-                } else if let Some(input) = self.reaching.get(&binding) {
-                    definitions.extend(input);
-                }
-            }
-            if alternate.reachable {
-                if let Some(changed) = alternate.changed.get(&binding) {
-                    definitions.extend(changed);
-                } else if let Some(input) = self.reaching.get(&binding) {
-                    definitions.extend(input);
-                }
-            }
-            self.set_reaching(binding, definitions);
-        }
-
-        self.reachable = consequent.reachable || alternate.reachable;
-    }
-
-    fn begin_loop(&mut self) {
-        self.break_environments.push(Vec::new());
-        self.begin_branch();
-    }
-
-    fn finish_loop(&mut self, body: BranchDefinitions, can_skip: bool, input_reachable: bool) {
-        self.merge_branches(
-            body,
-            BranchDefinitions {
-                changed: ReachingDefinitions::default(),
-                reachable: can_skip && input_reachable,
-            },
-        );
-
-        let break_environments = self.break_environments.pop().unwrap_or_default();
-        let has_break = !break_environments.is_empty();
-        for environment in break_environments {
-            for (binding, break_definitions) in environment {
-                let mut definitions = self.reaching.get(&binding).cloned().unwrap_or_default();
-                definitions.extend(break_definitions);
-                self.set_reaching(binding, definitions);
-            }
-        }
-        self.reachable |= has_break;
     }
 
     fn finish(self) -> ReturnRootDefinitions {
-        let definition_count = self.definition_sources.len();
-        let mut roots = self.returned_definitions;
-        let mut pending: Vec<_> = roots.iter().copied().collect();
-
-        while let Some(definition) = pending.pop() {
-            for source in &self.definition_sources[definition] {
-                if roots.insert(*source) {
-                    pending.push(*source);
-                }
-            }
+        let mut roots = FxHashSet::default();
+        for (binding, before) in &self.returned_values {
+            self.resolve(binding, *before, &mut roots);
         }
 
         ReturnRootDefinitions {
             roots,
-            definition_count,
+            definition_count: self.definitions.len(),
             next_definition: 0,
         }
     }
 }
 
-fn visit_value_source_identifiers(value: &Expr, visitor: &mut impl FnMut(&Ident)) {
+fn collect_value_sources(value: &Expr, sources: &mut Vec<Id>) -> bool {
     match value {
-        Expr::Ident(ident) => visitor(ident),
+        Expr::Ident(ident) => {
+            sources.push(ident.to_id());
+            false
+        }
+        Expr::JSXElement(element) => {
+            collect_jsx_child_sources(&element.children, sources);
+            true
+        }
+        Expr::JSXFragment(fragment) => {
+            collect_jsx_child_sources(&fragment.children, sources);
+            true
+        }
         Expr::Bin(binary)
             if matches!(
                 binary.op,
                 BinaryOp::LogicalAnd | BinaryOp::LogicalOr | BinaryOp::NullishCoalescing
             ) =>
         {
-            visit_value_source_identifiers(&binary.left, visitor);
-            visit_value_source_identifiers(&binary.right, visitor);
+            collect_value_sources(&binary.left, sources)
+                | collect_value_sources(&binary.right, sources)
         }
         Expr::Cond(cond) => {
-            visit_value_source_identifiers(&cond.cons, visitor);
-            visit_value_source_identifiers(&cond.alt, visitor);
+            collect_value_sources(&cond.cons, sources) | collect_value_sources(&cond.alt, sources)
         }
-        Expr::Paren(paren) => visit_value_source_identifiers(&paren.expr, visitor),
-        Expr::Seq(seq) => {
-            if let Some(value) = seq.exprs.last() {
-                visit_value_source_identifiers(value, visitor);
-            }
-        }
-        Expr::TsAs(ts_as) => visit_value_source_identifiers(&ts_as.expr, visitor),
-        Expr::TsConstAssertion(assertion) => {
-            visit_value_source_identifiers(&assertion.expr, visitor);
-        }
-        Expr::TsInstantiation(instantiation) => {
-            visit_value_source_identifiers(&instantiation.expr, visitor);
-        }
-        Expr::TsNonNull(non_null) => visit_value_source_identifiers(&non_null.expr, visitor),
-        Expr::TsSatisfies(satisfies) => {
-            visit_value_source_identifiers(&satisfies.expr, visitor);
-        }
-        Expr::TsTypeAssertion(assertion) => {
-            visit_value_source_identifiers(&assertion.expr, visitor);
-        }
-        _ => {}
+        Expr::Paren(paren) => collect_value_sources(&paren.expr, sources),
+        Expr::Seq(seq) => seq
+            .exprs
+            .last()
+            .is_some_and(|value| collect_value_sources(value, sources)),
+        _ => false,
     }
 }
 
-fn merge_reaching_definitions(
-    mut left: ReachingDefinitions,
-    right: ReachingDefinitions,
-) -> ReachingDefinitions {
-    for (binding, definitions) in right {
-        left.entry(binding).or_default().extend(definitions);
+fn collect_jsx_child_sources(children: &[JSXElementChild], sources: &mut Vec<Id>) {
+    for child in children {
+        match child {
+            JSXElementChild::JSXExprContainer(container) => {
+                if let JSXExpr::Expr(expr) = &container.expr {
+                    collect_value_sources(expr, sources);
+                }
+            }
+            JSXElementChild::JSXSpreadChild(spread) => {
+                collect_value_sources(&spread.expr, sources);
+            }
+            JSXElementChild::JSXElement(element) => {
+                collect_jsx_child_sources(&element.children, sources);
+            }
+            JSXElementChild::JSXFragment(fragment) => {
+                collect_jsx_child_sources(&fragment.children, sources);
+            }
+            JSXElementChild::JSXText(_) => {}
+            #[cfg(swc_ast_unknown)]
+            _ => panic!("unknown jsx element child"),
+        }
     }
-    left
 }
 
 impl Visit for ReturnRootDefinitionCollector {
@@ -287,181 +208,39 @@ impl Visit for ReturnRootDefinitionCollector {
 
     fn visit_arrow_expr(&mut self, _: &ArrowExpr) {}
 
-    fn visit_break_stmt(&mut self, _: &BreakStmt) {
-        if !self.reachable {
-            return;
-        }
-
-        if let Some(environments) = self.break_environments.last_mut() {
-            environments.push(std::mem::take(&mut self.reaching));
-            self.reachable = false;
-        }
-    }
-
     fn visit_function(&mut self, _: &Function) {}
 
-    fn visit_for_in_stmt(&mut self, for_in_stmt: &ForInStmt) {
-        for_in_stmt.left.visit_with(self);
-        for_in_stmt.right.visit_with(self);
-        let input_reachable = self.reachable;
-
-        self.begin_loop();
-        for_in_stmt.body.visit_with(self);
-        let body = self.finish_branch();
-        self.finish_loop(body, true, input_reachable);
-    }
-
-    fn visit_for_of_stmt(&mut self, for_of_stmt: &ForOfStmt) {
-        for_of_stmt.left.visit_with(self);
-        for_of_stmt.right.visit_with(self);
-        let input_reachable = self.reachable;
-
-        self.begin_loop();
-        for_of_stmt.body.visit_with(self);
-        let body = self.finish_branch();
-        self.finish_loop(body, true, input_reachable);
-    }
-
-    fn visit_for_stmt(&mut self, for_stmt: &ForStmt) {
-        for_stmt.init.visit_with(self);
-        for_stmt.test.visit_with(self);
-        let input_reachable = self.reachable;
-
-        self.begin_loop();
-        for_stmt.update.visit_with(self);
-        for_stmt.body.visit_with(self);
-        let body = self.finish_branch();
-        self.finish_loop(body, true, input_reachable);
-    }
-
     fn visit_assign_expr(&mut self, assign_expr: &AssignExpr) {
-        let AssignTarget::Simple(SimpleAssignTarget::Ident(target)) = &assign_expr.left else {
-            assign_expr.visit_children_with(self);
-            return;
-        };
-        if assign_expr.op != AssignOp::Assign {
-            assign_expr.visit_children_with(self);
-            return;
+        let definition = matches!(
+            &assign_expr.left,
+            AssignTarget::Simple(SimpleAssignTarget::Ident(_))
+        ) && assign_expr.op == AssignOp::Assign;
+        if definition {
+            let AssignTarget::Simple(SimpleAssignTarget::Ident(target)) = &assign_expr.left else {
+                unreachable!();
+            };
+            self.add_definition(target, &assign_expr.right);
         }
-
-        let definition = self.reserve_definition();
-        assign_expr.right.visit_with(self);
-        self.record_definition(definition, target, &assign_expr.right);
-    }
-
-    fn visit_if_stmt(&mut self, if_stmt: &IfStmt) {
-        if_stmt.test.visit_with(self);
-        let branch_reachable = self.reachable;
-
-        self.begin_branch();
-        if_stmt.cons.visit_with(self);
-        let consequent = self.finish_branch();
-
-        self.reachable = branch_reachable;
-        self.begin_branch();
-        if let Some(alternate) = &if_stmt.alt {
-            alternate.visit_with(self);
-        }
-        let alternate = self.finish_branch();
-
-        self.merge_branches(consequent, alternate);
+        assign_expr.visit_children_with(self);
     }
 
     fn visit_return_stmt(&mut self, return_stmt: &ReturnStmt) {
         if let Some(value) = return_stmt.arg.as_deref() {
             value.visit_with(self);
-            if self.reachable {
-                self.returned_definitions
-                    .extend(self.value_definitions(value));
-            }
+            self.add_returned_value(value);
         }
-        self.reachable = false;
-    }
-
-    fn visit_switch_stmt(&mut self, switch_stmt: &SwitchStmt) {
-        switch_stmt.discriminant.visit_with(self);
-        let switch_input = self.reaching.clone();
-        let switch_reachable = self.reachable;
-        let has_default = switch_stmt.cases.iter().any(|case| case.test.is_none());
-        let mut fallthrough = None;
-
-        self.break_environments.push(Vec::new());
-
-        for case in &switch_stmt.cases {
-            self.reaching = if let Some(fallthrough) = fallthrough.take() {
-                if switch_reachable {
-                    merge_reaching_definitions(switch_input.clone(), fallthrough)
-                } else {
-                    fallthrough
-                }
-            } else {
-                switch_input.clone()
-            };
-            self.reachable = switch_reachable || !self.reaching.is_empty();
-
-            if let Some(test) = &case.test {
-                test.visit_with(self);
-            }
-            for statement in &case.cons {
-                statement.visit_with(self);
-            }
-
-            if self.reachable {
-                fallthrough = Some(std::mem::take(&mut self.reaching));
-            }
-        }
-
-        let mut exits = self.break_environments.pop().unwrap_or_default();
-        if let Some(fallthrough) = fallthrough {
-            exits.push(fallthrough);
-        }
-        if switch_reachable && !has_default {
-            exits.push(switch_input);
-        }
-
-        let switch_reachable = !exits.is_empty();
-        let mut exits = exits.into_iter();
-        self.reaching = exits.next().unwrap_or_default();
-        for exit in exits {
-            self.reaching = merge_reaching_definitions(std::mem::take(&mut self.reaching), exit);
-        }
-        self.reachable = switch_reachable;
     }
 
     fn visit_var_declarator(&mut self, var_declarator: &VarDeclarator) {
-        let (Pat::Ident(target), Some(value)) = (&var_declarator.name, &var_declarator.init) else {
-            var_declarator.visit_children_with(self);
-            return;
-        };
-
-        let definition = self.reserve_definition();
-        value.visit_with(self);
-        self.record_definition(definition, target, value);
-    }
-
-    fn visit_while_stmt(&mut self, while_stmt: &WhileStmt) {
-        while_stmt.test.visit_with(self);
-        let input_reachable = self.reachable;
-
-        self.begin_loop();
-        while_stmt.body.visit_with(self);
-        let body = self.finish_branch();
-        self.finish_loop(body, true, input_reachable);
-    }
-
-    fn visit_do_while_stmt(&mut self, do_while_stmt: &DoWhileStmt) {
-        do_while_stmt.test.visit_with(self);
-        let input_reachable = self.reachable;
-
-        self.begin_loop();
-        do_while_stmt.body.visit_with(self);
-        let body = self.finish_branch();
-        self.finish_loop(body, false, input_reachable);
+        if let (Pat::Ident(target), Some(value)) = (&var_declarator.name, &var_declarator.init) {
+            self.add_definition(target, value);
+        }
+        var_declarator.visit_children_with(self);
     }
 }
 
 fn return_root_definitions_from_block(block: &BlockStmt) -> ReturnRootDefinitions {
-    let mut collector = ReturnRootDefinitionCollector::new();
+    let mut collector = ReturnRootDefinitionCollector::default();
     block.visit_with(&mut collector);
     collector.finish()
 }
@@ -478,11 +257,9 @@ fn return_root_definitions_from_arrow(arrow_expr: &ArrowExpr) -> ReturnRootDefin
     match arrow_expr.body.as_ref() {
         BlockStmtOrExpr::BlockStmt(block) => return_root_definitions_from_block(block),
         BlockStmtOrExpr::Expr(expr) => {
-            let mut collector = ReturnRootDefinitionCollector::new();
+            let mut collector = ReturnRootDefinitionCollector::default();
             expr.visit_with(&mut collector);
-            collector
-                .returned_definitions
-                .extend(collector.value_definitions(expr));
+            collector.add_returned_value(expr);
             collector.finish()
         }
         #[cfg(swc_ast_unknown)]
@@ -894,53 +671,9 @@ impl ReactComponentAnnotateVisitor {
             "react/compiler-runtime" => {
                 self.react_compiler_enabled = true;
             }
-            "react" => self.register_commonjs_react_pattern(&declarator.name),
-            _ => {}
-        }
-    }
-
-    fn register_commonjs_react_pattern(&mut self, pattern: &Pat) {
-        match pattern {
-            Pat::Ident(ident) => {
-                self.react_namespace_identifiers.insert(ident.id.to_id());
-            }
-            Pat::Object(object) => {
-                for property in &object.props {
-                    match property {
-                        ObjectPatProp::KeyValue(key_value) => {
-                            let imported_name = match &key_value.key {
-                                PropName::Ident(ident) => Some(ident.sym.as_ref()),
-                                PropName::Str(str) => str.value.as_str(),
-                                _ => None,
-                            };
-                            let Pat::Ident(local) = key_value.value.as_ref() else {
-                                continue;
-                            };
-
-                            match imported_name {
-                                Some("Fragment") => {
-                                    self.fragment_component_identifiers.insert(local.id.to_id());
-                                }
-                                Some("memo") => {
-                                    self.react_memo_identifiers.insert(local.id.to_id());
-                                }
-                                _ => {}
-                            }
-                        }
-                        ObjectPatProp::Assign(assign) => match assign.key.id.sym.as_ref() {
-                            "Fragment" => {
-                                self.fragment_component_identifiers
-                                    .insert(assign.key.id.to_id());
-                            }
-                            "memo" => {
-                                self.react_memo_identifiers.insert(assign.key.id.to_id());
-                            }
-                            _ => {}
-                        },
-                        ObjectPatProp::Rest(_) => {}
-                        #[cfg(swc_ast_unknown)]
-                        _ => panic!("unknown object pattern prop"),
-                    }
+            "react" => {
+                if let Pat::Ident(ident) = &declarator.name {
+                    self.react_namespace_identifiers.insert(ident.id.to_id());
                 }
             }
             _ => {}
