@@ -12,14 +12,14 @@ use jsx_scope::{
 };
 use jsx_utils::*;
 use path_utils::{extract_absolute_path, extract_filename};
-use rustc_hash::FxHashSet;
+use rustc_hash::{FxHashMap, FxHashSet};
 use styled::{styled_call_component_ref, transform_styled_call, StyledTransformAttrs};
 use swc_core::{
     common::{FileName, DUMMY_SP},
     ecma::{
         ast::*,
         atoms::Atom,
-        visit::{noop_visit_mut_type, VisitMut, VisitMutWith},
+        visit::{noop_visit_mut_type, noop_visit_type, Visit, VisitMut, VisitMutWith, VisitWith},
     },
     plugin::{
         metadata::TransformPluginMetadataContextKind, plugin_transform,
@@ -47,6 +47,128 @@ struct ElementAttrs {
     insertion_position: AttributeInsertionPosition,
 }
 
+// React Compiler can cache JSX in temps before forwarding one of them to the
+// value returned from the component. Follow the expressions that preserve a
+// render value without introducing a new one.
+#[derive(Default)]
+struct ReturnRootBindingCollector {
+    returned_identifiers: FxHashSet<Id>,
+    value_sources: FxHashMap<Id, FxHashSet<Id>>,
+}
+
+impl ReturnRootBindingCollector {
+    fn add_value_source(&mut self, target: &BindingIdent, value: &Expr) {
+        let target = target.id.to_id();
+
+        visit_value_source_identifiers(value, &mut |source| {
+            self.value_sources
+                .entry(target.clone())
+                .or_default()
+                .insert(source.to_id());
+        });
+    }
+
+    fn add_returned_value(&mut self, value: &Expr) {
+        visit_value_source_identifiers(value, &mut |source| {
+            self.returned_identifiers.insert(source.to_id());
+        });
+    }
+
+    fn return_root_bindings(self) -> FxHashSet<Id> {
+        let mut bindings = self.returned_identifiers;
+        let mut pending_bindings: Vec<_> = bindings.iter().cloned().collect();
+
+        while let Some(binding) = pending_bindings.pop() {
+            let Some(sources) = self.value_sources.get(&binding) else {
+                continue;
+            };
+
+            for source in sources {
+                if bindings.insert(source.clone()) {
+                    pending_bindings.push(source.clone());
+                }
+            }
+        }
+
+        bindings
+    }
+}
+
+fn visit_value_source_identifiers(value: &Expr, visitor: &mut impl FnMut(&Ident)) {
+    match value {
+        Expr::Ident(ident) => visitor(ident),
+        Expr::Cond(cond) => {
+            visit_value_source_identifiers(&cond.cons, visitor);
+            visit_value_source_identifiers(&cond.alt, visitor);
+        }
+        Expr::Paren(paren) => visit_value_source_identifiers(&paren.expr, visitor),
+        Expr::Seq(seq) => {
+            if let Some(value) = seq.exprs.last() {
+                visit_value_source_identifiers(value, visitor);
+            }
+        }
+        _ => {}
+    }
+}
+
+impl Visit for ReturnRootBindingCollector {
+    noop_visit_type!();
+
+    fn visit_arrow_expr(&mut self, _: &ArrowExpr) {}
+
+    fn visit_function(&mut self, _: &Function) {}
+
+    fn visit_assign_expr(&mut self, assign_expr: &AssignExpr) {
+        if assign_expr.op == AssignOp::Assign {
+            if let AssignTarget::Simple(SimpleAssignTarget::Ident(target)) = &assign_expr.left {
+                self.add_value_source(target, &assign_expr.right);
+            }
+        }
+    }
+
+    fn visit_jsx_element(&mut self, _: &JSXElement) {}
+
+    fn visit_jsx_fragment(&mut self, _: &JSXFragment) {}
+
+    fn visit_return_stmt(&mut self, return_stmt: &ReturnStmt) {
+        if let Some(value) = return_stmt.arg.as_deref() {
+            self.add_returned_value(value);
+        }
+    }
+
+    fn visit_var_declarator(&mut self, var_declarator: &VarDeclarator) {
+        if let (Pat::Ident(target), Some(value)) = (&var_declarator.name, &var_declarator.init) {
+            self.add_value_source(target, value);
+        }
+    }
+}
+
+fn returned_value_identifiers_from_block(block: &BlockStmt) -> FxHashSet<Id> {
+    let mut collector = ReturnRootBindingCollector::default();
+    block.visit_with(&mut collector);
+    collector.return_root_bindings()
+}
+
+fn returned_value_identifiers_from_function(function: &Function) -> FxHashSet<Id> {
+    function
+        .body
+        .as_ref()
+        .map(returned_value_identifiers_from_block)
+        .unwrap_or_default()
+}
+
+fn returned_value_identifiers_from_arrow(arrow_expr: &ArrowExpr) -> FxHashSet<Id> {
+    match arrow_expr.body.as_ref() {
+        BlockStmtOrExpr::BlockStmt(block) => returned_value_identifiers_from_block(block),
+        BlockStmtOrExpr::Expr(expr) => match expr.as_ref() {
+            Expr::Ident(ident) => std::iter::once(ident.to_id()).collect(),
+            _ => FxHashSet::default(),
+        },
+        #[cfg(swc_ast_unknown)]
+        _ => panic!("unknown block stmt or expr"),
+    }
+}
+
 pub struct ReactComponentAnnotateVisitor {
     config: PluginConfig,
     source_file_name: Option<Str>,
@@ -54,15 +176,14 @@ pub struct ReactComponentAnnotateVisitor {
     current_component_name: Option<Atom>,
     fragment_child_component_name: Option<Atom>,
     current_return_component_name: Option<Atom>,
-    /// Owner for a render-root JSX element that the React Compiler hoisted out
-    /// of `return` into a memo-cache assignment (`t = <jsx>`), where
-    /// `visit_component_return_expr` no longer sees it.
-    render_root_owner: Option<Atom>,
+    return_root_bindings: FxHashSet<Id>,
+    react_compiler_enabled: bool,
     ignored_elements: &'static FxHashSet<&'static str>,
     ignored_components_set: FxHashSet<String>,
     transparent_components_set: FxHashSet<String>,
     jsx_bindings: JsxBindingTracker,
     fragment_component_identifiers: FxHashSet<Id>,
+    react_memo_identifiers: FxHashSet<Id>,
     react_namespace_identifiers: FxHashSet<Id>,
     component_attr_ident: IdentName,
     element_attr_ident: IdentName,
@@ -115,8 +236,10 @@ impl ReactComponentAnnotateVisitor {
             current_component_name: None,
             fragment_child_component_name: None,
             current_return_component_name: None,
-            render_root_owner: None,
+            return_root_bindings: FxHashSet::default(),
+            react_compiler_enabled: false,
             styled_import: None,
+            react_memo_identifiers: FxHashSet::default(),
         }
     }
 
@@ -291,6 +414,14 @@ impl ReactComponentAnnotateVisitor {
     }
 
     #[inline]
+    fn is_global_react_memo_identifier(&self, ident: &Ident) -> bool {
+        let id = ident.to_id();
+
+        self.scoped_jsx_identifier_status(&id).is_none()
+            && self.react_memo_identifiers.contains(&id)
+    }
+
+    #[inline]
     fn is_unannotatable_jsx_element_name(&self, element_name: &JSXElementName) -> bool {
         let JSXElementName::Ident(ident) = element_name else {
             return false;
@@ -370,9 +501,16 @@ impl ReactComponentAnnotateVisitor {
                         Some(_) => panic!("unknown module export name"),
                     };
 
-                    if imported_name == Some("Fragment") {
-                        self.fragment_component_identifiers
-                            .insert(named_import.local.to_id());
+                    match imported_name {
+                        Some("Fragment") => {
+                            self.fragment_component_identifiers
+                                .insert(named_import.local.to_id());
+                        }
+                        Some("memo") => {
+                            self.react_memo_identifiers
+                                .insert(named_import.local.to_id());
+                        }
+                        _ => {}
                     }
                 }
                 #[cfg(swc_ast_unknown)]
@@ -432,12 +570,23 @@ impl ReactComponentAnnotateVisitor {
     }
 
     fn visit_var_declarator(&mut self, var_declarator: &mut VarDeclarator) {
+        let is_return_root_binding = matches!(
+            &var_declarator.name,
+            Pat::Ident(ident) if self.return_root_bindings.contains(&ident.id.to_id())
+        );
         let component_name = match &var_declarator.name {
             Pat::Ident(ident) => Some(ident.id.sym.clone()),
             _ => None,
         };
 
         var_declarator.name.visit_mut_with(self);
+
+        if is_return_root_binding {
+            if let Some(init) = &mut var_declarator.init {
+                self.visit_component_return_expr(init);
+            }
+            return;
+        }
 
         if component_name.as_ref().is_some_and(|component_name| {
             self.should_skip_component_child_traversal(component_name)
@@ -448,6 +597,12 @@ impl ReactComponentAnnotateVisitor {
         if let Some(init) = &mut var_declarator.init {
             match init.as_mut() {
                 Expr::Call(call_expr) => {
+                    if let Some(component_name) = component_name.clone() {
+                        if self.visit_react_memo_component(call_expr, component_name) {
+                            return;
+                        }
+                    }
+
                     if self.config.experimental_rewrite_emotion_styled {
                         if let (Some(component_name), Some(ref_component_name)) = (
                             component_name.as_ref(),
@@ -542,6 +697,7 @@ impl ReactComponentAnnotateVisitor {
         match item {
             ModuleItem::ModuleDecl(ModuleDecl::Import(import_decl)) => {
                 self.register_react_imports(import_decl);
+                self.react_compiler_enabled |= import_decl.src.value == "react/compiler-runtime";
             }
             ModuleItem::ModuleDecl(ModuleDecl::ExportDecl(export_decl)) => {
                 self.register_decl_bindings(&export_decl.decl);
@@ -566,33 +722,62 @@ impl ReactComponentAnnotateVisitor {
         }
     }
 
-    /// Adopt a pending `render_root_owner` as the owner of this JSX root (see
-    /// the field docs). Taken for the duration so nested children aren't
-    /// mistaken for roots; pass the returned state to `restore_render_root`.
-    fn adopt_render_root(&mut self) -> (Option<Atom>, Option<Option<Atom>>) {
-        let root_owner = self.render_root_owner.take();
-        let restore_component = if self.current_component_name.is_none() {
-            root_owner
-                .as_ref()
-                .map(|owner| self.current_component_name.replace(owner.clone()))
-        } else {
-            None
+    fn is_react_memo_call(&self, call_expr: &CallExpr) -> bool {
+        let Some(callee) = call_expr.callee.as_expr() else {
+            return false;
         };
-        (root_owner, restore_component)
+
+        match callee.as_ref() {
+            Expr::Ident(ident) => self.is_global_react_memo_identifier(ident),
+            Expr::Member(member_expr) => {
+                matches!(&member_expr.prop, MemberProp::Ident(prop) if prop.sym.as_ref() == "memo")
+                    && matches!(
+                        member_expr.obj.as_ref(),
+                        Expr::Ident(obj) if self.is_global_react_namespace_identifier(obj)
+                    )
+            }
+            #[cfg(swc_ast_unknown)]
+            Expr::Unknown(..) => panic!("unknown expr"),
+            _ => false,
+        }
     }
 
-    fn restore_render_root(&mut self, state: (Option<Atom>, Option<Option<Atom>>)) {
-        let (root_owner, restore_component) = state;
-        if let Some(prev_component) = restore_component {
-            self.current_component_name = prev_component;
+    fn visit_react_memo_component(
+        &mut self,
+        call_expr: &mut CallExpr,
+        component_name: Atom,
+    ) -> bool {
+        if !self.is_react_memo_call(call_expr) {
+            return false;
         }
-        // Restore so sibling roots on the same render spine are still adopted.
-        self.render_root_owner = root_owner;
+
+        let Some(component_arg) = call_expr.args.first_mut() else {
+            return false;
+        };
+        if component_arg.spread.is_some() {
+            return false;
+        }
+
+        match component_arg.expr.as_mut() {
+            Expr::Arrow(arrow_expr) => {
+                self.visit_arrow_as_component(arrow_expr, component_name);
+            }
+            Expr::Fn(function_expr) => {
+                self.visit_function_as_component(&mut function_expr.function, component_name);
+            }
+            #[cfg(swc_ast_unknown)]
+            Expr::Unknown(..) => panic!("unknown expr"),
+            _ => return false,
+        }
+
+        for arg in call_expr.args.iter_mut().skip(1) {
+            arg.visit_mut_with(self);
+        }
+
+        true
     }
 
     fn process_jsx_element(&mut self, element: &mut JSXElement) {
-        let render_root = self.adopt_render_root();
-
         // Check if this is a named fragment (Fragment, React.Fragment, or aliases)
         let is_fragment = self.is_react_fragment_element_name(&element.opening.name);
 
@@ -605,14 +790,10 @@ impl ReactComponentAnnotateVisitor {
         } else {
             self.visit_element_jsx_children(element);
         }
-
-        self.restore_render_root(render_root);
     }
 
     fn process_jsx_fragment(&mut self, fragment: &mut JSXFragment) {
-        let render_root = self.adopt_render_root();
         self.visit_fragment_jsx_children(fragment);
-        self.restore_render_root(render_root);
     }
 
     fn visit_fragment_jsx_children<N>(&mut self, node: &mut N)
@@ -700,8 +881,12 @@ impl ReactComponentAnnotateVisitor {
         let prev_return_component = self.current_return_component_name.replace(component_name);
         let prev_component = self.current_component_name.take();
         let prev_fragment_child_component = self.fragment_child_component_name.take();
-        let prev_render_root = self.render_root_owner.clone();
-        self.render_root_owner = self.current_return_component_name.clone();
+        let prev_return_root_bindings = std::mem::replace(
+            &mut self.return_root_bindings,
+            self.react_compiler_enabled
+                .then(|| returned_value_identifiers_from_function(func))
+                .unwrap_or_default(),
+        );
 
         self.jsx_bindings
             .push_function_with(collect_function_param_scope(&func.params));
@@ -711,7 +896,7 @@ impl ReactComponentAnnotateVisitor {
         self.current_return_component_name = prev_return_component;
         self.current_component_name = prev_component;
         self.fragment_child_component_name = prev_fragment_child_component;
-        self.render_root_owner = prev_render_root;
+        self.return_root_bindings = prev_return_root_bindings;
     }
 
     fn visit_arrow_as_component(&mut self, arrow_expr: &mut ArrowExpr, component_name: Atom) {
@@ -722,8 +907,12 @@ impl ReactComponentAnnotateVisitor {
         let prev_return_component = self.current_return_component_name.replace(component_name);
         let prev_component = self.current_component_name.take();
         let prev_fragment_child_component = self.fragment_child_component_name.take();
-        let prev_render_root = self.render_root_owner.clone();
-        self.render_root_owner = self.current_return_component_name.clone();
+        let prev_return_root_bindings = std::mem::replace(
+            &mut self.return_root_bindings,
+            self.react_compiler_enabled
+                .then(|| returned_value_identifiers_from_arrow(arrow_expr))
+                .unwrap_or_default(),
+        );
 
         self.jsx_bindings
             .push_function_with(collect_pat_list_scope(&arrow_expr.params));
@@ -742,7 +931,7 @@ impl ReactComponentAnnotateVisitor {
         self.current_return_component_name = prev_return_component;
         self.current_component_name = prev_component;
         self.fragment_child_component_name = prev_fragment_child_component;
-        self.render_root_owner = prev_render_root;
+        self.return_root_bindings = prev_return_root_bindings;
     }
 
     fn visit_component_return_expr(&mut self, expr: &mut Expr) {
@@ -842,7 +1031,7 @@ impl VisitMut for ReactComponentAnnotateVisitor {
         let prev_return_component = self.current_return_component_name.take();
         let prev_component = self.current_component_name.take();
         let prev_fragment_child_component = self.fragment_child_component_name.take();
-        let prev_render_root = self.render_root_owner.take();
+        let prev_return_root_bindings = std::mem::take(&mut self.return_root_bindings);
 
         self.jsx_bindings
             .push_function_with(collect_function_param_scope(&function.params));
@@ -852,7 +1041,7 @@ impl VisitMut for ReactComponentAnnotateVisitor {
         self.current_return_component_name = prev_return_component;
         self.current_component_name = prev_component;
         self.fragment_child_component_name = prev_fragment_child_component;
-        self.render_root_owner = prev_render_root;
+        self.return_root_bindings = prev_return_root_bindings;
     }
 
     fn visit_mut_var_decl(&mut self, var_decl: &mut VarDecl) {
@@ -926,7 +1115,7 @@ impl VisitMut for ReactComponentAnnotateVisitor {
         let prev_return_component = self.current_return_component_name.take();
         let prev_component = self.current_component_name.take();
         let prev_fragment_child_component = self.fragment_child_component_name.take();
-        let prev_render_root = self.render_root_owner.take();
+        let prev_return_root_bindings = std::mem::take(&mut self.return_root_bindings);
 
         self.jsx_bindings
             .push_function_with(collect_pat_list_scope(&arrow_expr.params));
@@ -936,7 +1125,22 @@ impl VisitMut for ReactComponentAnnotateVisitor {
         self.current_return_component_name = prev_return_component;
         self.current_component_name = prev_component;
         self.fragment_child_component_name = prev_fragment_child_component;
-        self.render_root_owner = prev_render_root;
+        self.return_root_bindings = prev_return_root_bindings;
+    }
+
+    fn visit_mut_assign_expr(&mut self, assign_expr: &mut AssignExpr) {
+        let is_return_root_assignment = assign_expr.op == AssignOp::Assign
+            && matches!(
+                &assign_expr.left,
+                AssignTarget::Simple(SimpleAssignTarget::Ident(ident))
+                    if self.return_root_bindings.contains(&ident.id.to_id())
+            );
+
+        if is_return_root_assignment {
+            self.visit_component_return_expr(&mut assign_expr.right);
+        } else {
+            assign_expr.visit_mut_children_with(self);
+        }
     }
 
     fn visit_mut_return_stmt(&mut self, return_stmt: &mut ReturnStmt) {
