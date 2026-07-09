@@ -76,6 +76,28 @@ test("attributes transparent callsites owned by memo components", () => {
   }
 });
 
+test("supports transparent memo owners in CommonJS scripts", () => {
+  const code = transform(
+    `
+      const React = require("react");
+
+      const MemoActions = React.memo(function MemoActions() {
+        return <Grid />;
+      });
+
+      function Grid(props) {
+        return <div {...props} />;
+      }
+
+      module.exports = MemoActions;
+    `,
+    {...sentryConfig, "transparent-components": ["Grid"]},
+    {...reactCompiler, isModule: false}
+  );
+
+  assert.match(code, /"data-sentry-component": "MemoActions-Grid"/);
+});
+
 test("does not treat non-return JSX as a React Compiler render root", () => {
   const code = transform(
     `
@@ -94,6 +116,33 @@ test("does not treat non-return JSX as a React Compiler render root", () => {
 
   assert.match(code, /register\([\s\S]*?_jsx\(Grid,/);
   assert.doesNotMatch(code, /"data-sentry-component": "App-Grid"/);
+});
+
+test("does not treat a later reassignment as a returned render root", () => {
+  const code = transform(
+    `
+      function App({notify}) {
+        let value = <Grid />;
+        const root = value;
+        value = <Button />;
+        notify(value);
+        return root;
+      }
+
+      function Grid(props) {
+        return <div {...props} />;
+      }
+
+      function Button(props) {
+        return <button {...props} />;
+      }
+    `,
+    {...sentryConfig, "transparent-components": ["Button", "Grid"]},
+    reactCompiler
+  );
+
+  assert.match(code, /"data-sentry-component": "App-Grid"/);
+  assert.doesNotMatch(code, /"data-sentry-component": "App-Button"/);
 });
 
 test("attributes React Compiler cache values forwarded through a returned local", () => {
@@ -135,6 +184,84 @@ test("attributes React Compiler cache values selected by a returned conditional"
         const first = <Grid />;
         const second = <Button />;
         root = ready ? first : second;
+        return root;
+      }
+
+      function Grid(props) {
+        return <div {...props} />;
+      }
+
+      function Button(props) {
+        return <button {...props} />;
+      }
+    `,
+    {...sentryConfig, "transparent-components": ["Button", "Grid"]},
+    reactCompiler
+  );
+
+  assert.match(code, /"data-sentry-component": "App-Grid"/);
+  assert.match(code, /"data-sentry-component": "App-Button"/);
+});
+
+test("attributes React Compiler cache values used by a logical return", () => {
+  const code = transform(
+    `
+      function App({ready}) {
+        const first = <Grid />;
+        const root = ready && first;
+        return root;
+      }
+
+      function Grid(props) {
+        return <div {...props} />;
+      }
+    `,
+    {...sentryConfig, "transparent-components": ["Grid"]},
+    reactCompiler
+  );
+
+  assert.match(code, /"data-sentry-component": "App-Grid"/);
+});
+
+test("attributes React Compiler cache values selected by a switch", () => {
+  const code = transform(
+    `
+      function App({kind}) {
+        let root;
+        switch (kind) {
+          case "grid":
+            root = <Grid />;
+            break;
+          default:
+            root = <Button />;
+        }
+        return root;
+      }
+
+      function Grid(props) {
+        return <div {...props} />;
+      }
+
+      function Button(props) {
+        return <button {...props} />;
+      }
+    `,
+    {...sentryConfig, "transparent-components": ["Button", "Grid"]},
+    reactCompiler
+  );
+
+  assert.match(code, /"data-sentry-component": "App-Grid"/);
+  assert.match(code, /"data-sentry-component": "App-Button"/);
+});
+
+test("attributes initial and reassigned React Compiler loop values", () => {
+  const code = transform(
+    `
+      function App({items}) {
+        let root = <Grid />;
+        for (const item of items) {
+          root = <Button key={item} />;
+        }
         return root;
       }
 

@@ -11,7 +11,7 @@ const pluginPath = path.resolve(
 export function transform(
   source: string,
   pluginConfig: PluginConfig = {},
-  swcOptions: Pick<Options, "jsc"> = {}
+  swcOptions: Pick<Options, "isModule" | "jsc"> = {}
 ): string {
   const jsc: NonNullable<Options["jsc"]> = {
     parser: {syntax: "ecmascript", jsx: true},
@@ -22,10 +22,15 @@ export function transform(
     jsc.transform = swcOptions.jsc.transform;
   }
 
-  return transformSync(source, {
+  const options: Options = {
     filename: path.resolve("tests/e2e/Button.jsx"),
     jsc,
-  }).code;
+  };
+  if (swcOptions.isModule !== undefined) {
+    options.isModule = swcOptions.isModule;
+  }
+
+  return transformSync(source, options).code;
 }
 
 /** SWC options that enable the automatic runtime + React Compiler. */
