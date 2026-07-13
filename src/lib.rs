@@ -705,6 +705,22 @@ impl ReactComponentAnnotateVisitor {
         });
     }
 
+    fn mark_fragment_assignment(&mut self, assign_expr: &AssignExpr) {
+        // React Compiler may hoist a JSX tag into an initially unassigned
+        // binding (`T0 = Fragment`) before rendering `<T0>`.
+        if assign_expr.op != AssignOp::Assign
+            || !self.expr_may_resolve_to_fragment(&assign_expr.right)
+        {
+            return;
+        }
+
+        let AssignTarget::Simple(SimpleAssignTarget::Ident(target)) = &assign_expr.left else {
+            return;
+        };
+
+        self.jsx_bindings.mark_unannotatable(&target.id.to_id());
+    }
+
     fn visit_var_declarator(&mut self, var_declarator: &mut VarDeclarator) {
         let is_return_root_definition = matches!(&var_declarator.name, Pat::Ident(_))
             && var_declarator.init.is_some()
@@ -1270,6 +1286,8 @@ impl VisitMut for ReactComponentAnnotateVisitor {
     }
 
     fn visit_mut_assign_expr(&mut self, assign_expr: &mut AssignExpr) {
+        self.mark_fragment_assignment(assign_expr);
+
         let is_return_root_assignment = assign_expr.op == AssignOp::Assign
             && matches!(
                 &assign_expr.left,

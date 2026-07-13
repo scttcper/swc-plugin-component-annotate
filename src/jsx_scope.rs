@@ -72,6 +72,20 @@ impl JsxBindingTracker {
             .filter_map(|scope| scope.bindings.as_ref())
             .find_map(|scope| scope.get(id).copied())
     }
+
+    pub(crate) fn mark_unannotatable(&mut self, id: &Id) {
+        for scope in self.scopes.iter_mut().rev() {
+            let Some(bindings) = scope.bindings.as_mut() else {
+                continue;
+            };
+            let Some(status) = bindings.get_mut(id) else {
+                continue;
+            };
+
+            *status = JsxIdentifierStatus::Unannotatable;
+            return;
+        }
+    }
 }
 
 impl JsxBindingScope {

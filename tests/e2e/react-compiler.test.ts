@@ -247,6 +247,27 @@ test("attributes separately cached JSX children", () => {
   assert.match(code, /"data-sentry-component": "App-Button"/);
 });
 
+test("does not annotate a Fragment hoisted into a JSX tag binding", () => {
+  const code = transform(
+    `
+      import {Fragment} from "react";
+
+      function App({items}) {
+        const filtered = items.filter(Boolean);
+        return <Fragment>{filtered.map(item => <Row item={item} />)}</Fragment>;
+      }
+    `,
+    sentryConfig,
+    reactCompiler
+  );
+
+  // This source currently makes React Compiler emit `T0 = Fragment` and then
+  // use T0 as the JSX tag. The annotation pass runs against that output.
+  assert.match(code, /T0 = Fragment/);
+  assert.match(code, /_jsx\(T0, \{/);
+  assert.doesNotMatch(code, /"data-sentry-element": "T0"/);
+});
+
 test("annotates cached React Compiler return values", () => {
   const code = transform(
     `
