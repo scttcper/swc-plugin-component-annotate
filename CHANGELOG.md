@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.18.0 (2026-08-25)
+
+* build: update the SWC plugin ABI for Rspack 2.2
+* test: verify the plugin through Rspack's built-in SWC loader
+* chore: update Rust, Node dependencies, and GitHub Actions
+
 ## 1.11.0 (2025-10-14)
 
 * build: Setup trusted publishing, add npm link ([49d21a6](https://github.com/scttcper/swc-plugin-component-annotate/commit/49d21a6))

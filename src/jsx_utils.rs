@@ -3,7 +3,7 @@ use swc_core::ecma::ast::*;
 
 /// Extract the element name from a JSX element
 #[inline]
-pub fn get_element_name(element: &JSXElementName) -> Cow<str> {
+pub fn get_element_name(element: &JSXElementName) -> Cow<'_, str> {
     match element {
         JSXElementName::Ident(ident) => Cow::Borrowed(ident.sym.as_ref()),
         JSXElementName::JSXMemberExpr(member_expr) => {

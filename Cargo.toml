@@ -6,24 +6,25 @@ homepage    = "https://github.com/scttcper/swc-plugin-component-annotate"
 keywords    = ["swc-plugin", "swc", "react", "jsx", "component", "tracking", "annotation"]
 license     = "MIT"
 name        = "swc-plugin-component-annotate"
+publish     = false
 readme      = "README.md"
 repository  = "https://github.com/scttcper/swc-plugin-component-annotate"
-version     = "1.0.0"
+version     = "1.18.0"
 
 [lib]
 crate-type = ["cdylib", "lib"]
 
 [dependencies]
-rustc-hash = "2.1.1"
-serde = { version = "1.0.225", features = ["derive"], default-features = false }
-serde_json = { version = "1.0.145", default-features = false }
-# Pinned to the swc_core ABI embedded in @rspack/core 2.1.x.
-swc_core = { version = "=71.0.1", features = ["ecma_plugin_transform"] }
+rustc-hash = "2.1.3"
+serde = { version = "1.0.229", features = ["derive"], default-features = false }
+serde_json = { version = "1.0.151", default-features = false }
+# Pinned to the swc_core ABI embedded in @rspack/core 2.2.0.
+swc_core = { version = "=77.0.0", features = ["ecma_plugin_transform"] }
 
 
 [dev-dependencies]
-testing = "24.0.1"
-swc_core = { version = "=71.0.1", features = ["ecma_plugin_transform", "ecma_parser", "swc_ecma_transforms_testing"] }
+testing = "27.0.0"
+swc_core = { version = "=77.0.0", features = ["ecma_plugin_transform", "ecma_parser", "swc_ecma_transforms_testing"] }
 
 [profile.release]
 codegen-units = 1

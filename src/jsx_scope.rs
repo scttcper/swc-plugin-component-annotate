@@ -7,10 +7,11 @@ pub(crate) enum JsxIdentifierStatus {
     Unannotatable,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
 enum JsxBindingScopeKind {
     Module,
     Function,
+    #[default]
     Block,
 }
 
@@ -100,12 +101,6 @@ impl JsxBindingScope {
         self.bindings
             .get_or_insert_with(FxHashMap::default)
             .insert(id, status);
-    }
-}
-
-impl Default for JsxBindingScopeKind {
-    fn default() -> Self {
-        Self::Block
     }
 }
 
