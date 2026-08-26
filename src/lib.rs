@@ -239,9 +239,9 @@ impl Visit for ReturnRootDefinitionCollector {
     }
 }
 
-fn return_root_definitions_from_block(block: &BlockStmt) -> ReturnRootDefinitions {
+fn return_root_definitions_from_function_body(body: &FunctionBody) -> ReturnRootDefinitions {
     let mut collector = ReturnRootDefinitionCollector::default();
-    block.visit_with(&mut collector);
+    body.visit_with(&mut collector);
     collector.finish()
 }
 
@@ -249,14 +249,14 @@ fn return_root_definitions_from_function(function: &Function) -> ReturnRootDefin
     function
         .body
         .as_ref()
-        .map(return_root_definitions_from_block)
+        .map(return_root_definitions_from_function_body)
         .unwrap_or_default()
 }
 
 fn return_root_definitions_from_arrow(arrow_expr: &ArrowExpr) -> ReturnRootDefinitions {
     match arrow_expr.body.as_ref() {
-        BlockStmtOrExpr::BlockStmt(block) => return_root_definitions_from_block(block),
-        BlockStmtOrExpr::Expr(expr) => {
+        ArrowFunctionBody::FunctionBody(body) => return_root_definitions_from_function_body(body),
+        ArrowFunctionBody::Expr(expr) => {
             let mut collector = ReturnRootDefinitionCollector::default();
             expr.visit_with(&mut collector);
             collector.add_returned_value(expr);
@@ -1034,9 +1034,11 @@ impl ReactComponentAnnotateVisitor {
         let prev_fragment_child_component = self.fragment_child_component_name.take();
         let prev_return_root_definitions = std::mem::replace(
             &mut self.return_root_definitions,
-            self.react_compiler_enabled
-                .then(|| return_root_definitions_from_function(func))
-                .unwrap_or_default(),
+            if self.react_compiler_enabled {
+                return_root_definitions_from_function(func)
+            } else {
+                ReturnRootDefinitions::default()
+            },
         );
 
         self.jsx_bindings
@@ -1064,18 +1066,20 @@ impl ReactComponentAnnotateVisitor {
         let prev_fragment_child_component = self.fragment_child_component_name.take();
         let prev_return_root_definitions = std::mem::replace(
             &mut self.return_root_definitions,
-            self.react_compiler_enabled
-                .then(|| return_root_definitions_from_arrow(arrow_expr))
-                .unwrap_or_default(),
+            if self.react_compiler_enabled {
+                return_root_definitions_from_arrow(arrow_expr)
+            } else {
+                ReturnRootDefinitions::default()
+            },
         );
 
         self.jsx_bindings
             .push_function_with(collect_pat_list_scope(&arrow_expr.params));
         match arrow_expr.body.as_mut() {
-            BlockStmtOrExpr::BlockStmt(block) => {
-                block.visit_mut_with(self);
+            ArrowFunctionBody::FunctionBody(body) => {
+                body.visit_mut_with(self);
             }
-            BlockStmtOrExpr::Expr(expr) => {
+            ArrowFunctionBody::Expr(expr) => {
                 self.visit_component_return_expr(expr);
             }
             #[cfg(swc_ast_unknown)]
@@ -1243,6 +1247,16 @@ impl VisitMut for ReactComponentAnnotateVisitor {
             self.visit_predeclared_stmt(stmt);
         }
         self.jsx_bindings.pop();
+    }
+
+    fn visit_mut_function_body(&mut self, function_body: &mut FunctionBody) {
+        for stmt in &function_body.stmts {
+            self.register_script_stmt_bindings(stmt);
+        }
+
+        for stmt in &mut function_body.stmts {
+            self.visit_predeclared_stmt(stmt);
+        }
     }
 
     fn visit_mut_switch_stmt(&mut self, switch_stmt: &mut SwitchStmt) {

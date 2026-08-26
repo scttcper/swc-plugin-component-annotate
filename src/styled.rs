@@ -103,9 +103,9 @@ pub(crate) fn transform_styled_call(
         span: DUMMY_SP,
         ctxt: Default::default(),
         params: vec![props_param],
-        body: Box::new(BlockStmtOrExpr::Expr(Box::new(Expr::JSXElement(Box::new(
-            jsx_element,
-        ))))),
+        body: Box::new(ArrowFunctionBody::Expr(Box::new(Expr::JSXElement(
+            Box::new(jsx_element),
+        )))),
         is_async: false,
         is_generator: false,
         type_params: None,

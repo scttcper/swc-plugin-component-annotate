@@ -105,8 +105,6 @@ dist
 
 .DS_Store
 
-/target
-^target/
-target
-.swc
+/target/
+.swc/
 *.wasm
