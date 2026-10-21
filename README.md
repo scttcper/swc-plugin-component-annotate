@@ -149,6 +149,16 @@ function IssueActions() {
 }
 ```
 
+Those are the callsite attributes. A component that spreads its props onto a DOM element is annotated too, and its own attributes go after the spread, so they replace the forwarded ones. If `Button` renders `<button {...props}>`, the DOM ends up with `Button`'s component name and file:
+
+```html
+<button data-sentry-element="Button" data-sentry-component="Button" data-sentry-source-file="button.tsx">
+  Resolve
+</button>
+```
+
+Sentry's SDK names a clicked node by walking up at most five levels and taking the first `data-sentry-component`, then `data-sentry-element`, so every click on this button reports `Button` from `button.tsx`.
+
 If the React component `Button` is also configured as transparent, it gets the same root owner with its own component name. Transparent wrappers do not accumulate in nested labels:
 
 ```jsx
@@ -181,7 +191,7 @@ The useful result is that layout DOM retains both the owner and the transparent 
 </div>
 ```
 
-Whether to include components such as `Button`, `Link`, `Checkbox`, or `MenuItem` depends on the signal you want in the DOM. Leave them out of `transparent-components` when their component name should be reported as an element. Include them when the combined label is more useful, for example `IssueActions-Button`.
+Whether to include components such as `Button`, `Link`, `Checkbox`, or `MenuItem` depends on the signal you want in the DOM. Leave them out of `transparent-components` when reporting the component itself, `Button` from `button.tsx`, is enough. Include them when the caller matters, so clicks report labels like `IssueActions-Button` with the caller's file.
 
 Use `ignored-components` only when a component should not participate in annotation at all. Ignored components get no generated attributes. Use `transparent-components` when a component should still receive useful owner metadata, but should not report itself as `data-sentry-element`.
 
