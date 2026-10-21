@@ -18,7 +18,7 @@ This plugin transforms React components by adding data attributes that help with
 - ✅ **React Fragments**: Supports `Fragment`, `React.Fragment`, and `<>` syntax
 - ✅ **Nested Components**: Properly handles component hierarchies
 - ✅ **React Native Support**: Uses camelCase attributes when configured
-- ✅ **Configurable**: Ignore specific components, annotate fragments, etc.
+- ✅ **Configurable**: Custom attribute names, ignored components, and transparent wrappers
 
 ## Installation
 
@@ -275,8 +275,8 @@ With `"native": true`:
 // Output
 const MyComponent = () => {
   return (
-    <View dataComponent="MyComponent" dataSourceFile="MyComponent.jsx">
-      <Text>Hello World</Text>
+    <View dataElement="View" dataComponent="MyComponent" dataSourceFile="MyComponent.jsx">
+      <Text dataElement="Text" dataSourceFile="MyComponent.jsx">Hello World</Text>
     </View>
   );
 };

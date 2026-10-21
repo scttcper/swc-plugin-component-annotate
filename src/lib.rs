@@ -52,6 +52,8 @@ type DefinitionId = usize;
 enum DefinitionRole {
     /// JSX the component returns
     ReturnRoot,
+    /// JSX the component renders as a child of a returned element
+    ReturnChild,
     /// JSX an `<svg>` renders, which gets no attributes
     SvgContent,
     Other,
@@ -60,6 +62,7 @@ enum DefinitionRole {
 #[derive(Default)]
 struct ReturnRootDefinitions {
     roots: FxHashSet<DefinitionId>,
+    children: FxHashSet<DefinitionId>,
     svg_contents: FxHashSet<DefinitionId>,
     definition_count: usize,
     next_definition: DefinitionId,
@@ -75,6 +78,8 @@ impl ReturnRootDefinitions {
         self.next_definition += 1;
         if self.roots.contains(&definition) {
             DefinitionRole::ReturnRoot
+        } else if self.children.contains(&definition) {
+            DefinitionRole::ReturnChild
         } else if self.svg_contents.contains(&definition) {
             DefinitionRole::SvgContent
         } else {
@@ -83,29 +88,49 @@ impl ReturnRootDefinitions {
     }
 }
 
+/// How a value renders a binding it refers to
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SourceKind {
+    /// As the value itself, like `t0` in `cond ? t0 : null`
+    Value,
+    /// As a child of an element in the value, like `t0` in `<div>{t0}</div>`
+    Child,
+}
+
 struct Definition {
-    sources: Vec<Id>,
+    sources: Vec<(Id, SourceKind)>,
     contains_jsx: bool,
 }
 
 // React Compiler caches JSX in local definitions before returning it. Resolve
 // aliases to the latest earlier definition that contains JSX or forwards
 // another identifier. Cache restore assignments such as `t1 = $[0]` are not
-// value origins and are intentionally skipped.
-#[derive(Default)]
-struct ReturnRootDefinitionCollector {
+// value origins and are intentionally skipped. JSX cached out of a returned
+// element is tracked apart from the roots so it's annotated like a child.
+struct ReturnRootDefinitionCollector<'a> {
+    is_fragment: &'a dyn Fn(&JSXElementName) -> bool,
     definitions: Vec<Definition>,
     definitions_by_binding: FxHashMap<Id, Vec<DefinitionId>>,
-    returned_values: Vec<(Id, DefinitionId)>,
+    returned_values: Vec<(Id, SourceKind, DefinitionId)>,
     /// Bindings an `<svg>` renders, like `t0` in `<svg>{t0}</svg>`
     svg_values: Vec<(Id, DefinitionId)>,
 }
 
-impl ReturnRootDefinitionCollector {
+impl<'a> ReturnRootDefinitionCollector<'a> {
+    fn new(is_fragment: &'a dyn Fn(&JSXElementName) -> bool) -> Self {
+        Self {
+            is_fragment,
+            definitions: Vec::new(),
+            definitions_by_binding: FxHashMap::default(),
+            returned_values: Vec::new(),
+            svg_values: Vec::new(),
+        }
+    }
+
     fn add_definition(&mut self, target: &BindingIdent, value: &Expr) {
         let id = self.definitions.len();
         let mut sources = Vec::new();
-        let contains_jsx = collect_value_sources(value, &mut sources);
+        let contains_jsx = self.collect_value_sources(value, SourceKind::Value, &mut sources);
         self.definitions.push(Definition {
             sources,
             contains_jsx,
@@ -119,140 +144,276 @@ impl ReturnRootDefinitionCollector {
     fn add_returned_value(&mut self, value: &Expr) {
         let before = self.definitions.len();
         let mut sources = Vec::new();
-        collect_value_sources(value, &mut sources);
-        self.returned_values
-            .extend(sources.into_iter().map(|source| (source, before)));
+        self.collect_value_sources(value, SourceKind::Value, &mut sources);
+        self.returned_values.extend(
+            sources
+                .into_iter()
+                .map(|(source, kind)| (source, kind, before)),
+        );
     }
 
-    /// With `every_branch`, follows every earlier definition instead of only the
-    /// latest, so a value picked in `if` or `switch` branches counts from each one
-    fn resolve(
+    /// Earlier definitions of `binding` that hold JSX or forward another
+    /// binding, latest first
+    fn value_definitions(
         &self,
         binding: &Id,
         before: DefinitionId,
-        every_branch: bool,
-        resolved: &mut FxHashSet<DefinitionId>,
-    ) {
-        let definitions = self
-            .definitions_by_binding
+    ) -> impl Iterator<Item = DefinitionId> + '_ {
+        self.definitions_by_binding
             .get(binding)
             .into_iter()
             .flat_map(|definitions| definitions.iter().rev().copied())
-            .filter(|&definition| {
+            .filter(move |&definition| {
                 definition < before
                     && (self.definitions[definition].contains_jsx
                         || !self.definitions[definition].sources.is_empty())
-            });
+            })
+    }
 
-        for definition in definitions {
-            if resolved.insert(definition) {
-                for source in &self.definitions[definition].sources {
-                    self.resolve(source, definition, every_branch, resolved);
+    /// Marks the latest definition of a binding the component returns, as a root
+    /// or as a child of one, then follows what that definition renders
+    fn resolve_returned(
+        &self,
+        binding: &Id,
+        before: DefinitionId,
+        kind: SourceKind,
+        roots: &mut FxHashSet<DefinitionId>,
+        children: &mut FxHashSet<DefinitionId>,
+    ) {
+        let Some(definition) = self.value_definitions(binding, before).next() else {
+            return;
+        };
+        let newly_marked = match kind {
+            SourceKind::Value => roots.insert(definition),
+            SourceKind::Child => !roots.contains(&definition) && children.insert(definition),
+        };
+        if !newly_marked {
+            return;
+        }
+
+        for (source, source_kind) in &self.definitions[definition].sources {
+            // Whatever a child renders is a child too
+            let source_kind = if kind == SourceKind::Child {
+                SourceKind::Child
+            } else {
+                *source_kind
+            };
+            self.resolve_returned(source, definition, source_kind, roots, children);
+        }
+    }
+
+    /// Marks every earlier definition of a binding an `<svg>` renders, so a
+    /// value picked in `if` or `switch` branches counts from each one
+    fn resolve_svg(
+        &self,
+        binding: &Id,
+        before: DefinitionId,
+        svg_contents: &mut FxHashSet<DefinitionId>,
+    ) {
+        for definition in self.value_definitions(binding, before) {
+            if svg_contents.insert(definition) {
+                for (source, _) in &self.definitions[definition].sources {
+                    self.resolve_svg(source, definition, svg_contents);
                 }
-            }
-            if !every_branch {
-                break;
             }
         }
     }
 
     fn finish(self) -> ReturnRootDefinitions {
         let mut roots = FxHashSet::default();
-        for (binding, before) in &self.returned_values {
-            self.resolve(binding, *before, false, &mut roots);
+        let mut children = FxHashSet::default();
+        for (binding, kind, before) in &self.returned_values {
+            self.resolve_returned(binding, *before, *kind, &mut roots, &mut children);
         }
+        // JSX the component also returns directly stays a root
+        children.retain(|definition| !roots.contains(definition));
 
         // The compiler hoists `<svg>` children into definitions ahead of it. Every
         // branch that could be rendered there is skipped, at the cost of skipping
         // a value reassigned after something outside the `<svg>` rendered it.
         let mut svg_contents = FxHashSet::default();
         for (binding, before) in &self.svg_values {
-            self.resolve(binding, *before, true, &mut svg_contents);
+            self.resolve_svg(binding, *before, &mut svg_contents);
         }
-        // JSX the component also returns outside an `<svg>` stays annotated
-        svg_contents.retain(|definition| !roots.contains(definition));
+        // JSX the component also renders outside an `<svg>` stays annotated
+        svg_contents
+            .retain(|definition| !roots.contains(definition) && !children.contains(definition));
 
         ReturnRootDefinitions {
             roots,
+            children,
             svg_contents,
             definition_count: self.definitions.len(),
             next_definition: 0,
         }
     }
-}
 
-fn collect_value_sources(value: &Expr, sources: &mut Vec<Id>) -> bool {
-    match value {
-        Expr::Ident(ident) => {
-            sources.push(ident.to_id());
-            false
-        }
-        Expr::JSXElement(element) => {
-            collect_jsx_element_sources(element, sources);
-            true
-        }
-        Expr::JSXFragment(fragment) => {
-            collect_jsx_child_sources(&fragment.children, sources);
-            true
-        }
-        Expr::Bin(binary)
-            if matches!(
-                binary.op,
-                BinaryOp::LogicalAnd | BinaryOp::LogicalOr | BinaryOp::NullishCoalescing
-            ) =>
-        {
-            collect_value_sources(&binary.left, sources)
-                | collect_value_sources(&binary.right, sources)
-        }
-        Expr::Cond(cond) => {
-            collect_value_sources(&cond.cons, sources) | collect_value_sources(&cond.alt, sources)
-        }
-        Expr::Paren(paren) => collect_value_sources(&paren.expr, sources),
-        Expr::Seq(seq) => seq
-            .exprs
-            .last()
-            .is_some_and(|value| collect_value_sources(value, sources)),
-        // Calls, objects and arrays pass nested JSX into what the component renders,
-        // e.g. `tct('[link]', {link: <Link />})` or `createPortal(<div />, el)`.
-        // Callees and member objects stay out so `$[0]` cache reads aren't origins.
-        Expr::Call(call) => collect_args_sources(&call.args, sources),
-        // A callback handed to a rendered call, like `items.map(t3)`, renders its JSX
-        Expr::Arrow(_) | Expr::Fn(_) => contains_jsx(value),
-        Expr::New(new) => new
-            .args
-            .as_deref()
-            .is_some_and(|args| collect_args_sources(args, sources)),
-        Expr::Array(array) => array
-            .elems
-            .iter()
-            .flatten()
-            .fold(false, |contains_jsx, elem| {
-                collect_value_sources(&elem.expr, sources) | contains_jsx
-            }),
-        Expr::Object(object) => object.props.iter().fold(false, |contains_jsx, prop| {
-            let value_contains_jsx = match prop {
-                PropOrSpread::Spread(spread) => collect_value_sources(&spread.expr, sources),
-                PropOrSpread::Prop(prop) => match prop.as_ref() {
-                    Prop::KeyValue(key_value) => collect_value_sources(&key_value.value, sources),
-                    Prop::Shorthand(ident) => {
-                        sources.push(ident.to_id());
-                        false
+    fn collect_value_sources(
+        &self,
+        value: &Expr,
+        kind: SourceKind,
+        sources: &mut Vec<(Id, SourceKind)>,
+    ) -> bool {
+        match value {
+            Expr::Ident(ident) => {
+                sources.push((ident.to_id(), kind));
+                false
+            }
+            Expr::JSXElement(element) => {
+                self.collect_jsx_element_sources(element, kind, sources);
+                true
+            }
+            Expr::JSXFragment(fragment) => {
+                self.collect_jsx_child_sources(&fragment.children, kind, sources);
+                true
+            }
+            Expr::Bin(binary)
+                if matches!(
+                    binary.op,
+                    BinaryOp::LogicalAnd | BinaryOp::LogicalOr | BinaryOp::NullishCoalescing
+                ) =>
+            {
+                self.collect_value_sources(&binary.left, kind, sources)
+                    | self.collect_value_sources(&binary.right, kind, sources)
+            }
+            Expr::Cond(cond) => {
+                self.collect_value_sources(&cond.cons, kind, sources)
+                    | self.collect_value_sources(&cond.alt, kind, sources)
+            }
+            Expr::Paren(paren) => self.collect_value_sources(&paren.expr, kind, sources),
+            Expr::Seq(seq) => seq
+                .exprs
+                .last()
+                .is_some_and(|value| self.collect_value_sources(value, kind, sources)),
+            // Calls, objects and arrays pass nested JSX into what the component renders,
+            // e.g. `tct('[link]', {link: <Link />})` or `createPortal(<div />, el)`.
+            // Callees and member objects stay out so `$[0]` cache reads aren't origins.
+            Expr::Call(call) => self.collect_args_sources(&call.args, kind, sources),
+            // A callback handed to a rendered call, like `items.map(t3)`, renders its JSX
+            Expr::Arrow(_) | Expr::Fn(_) => contains_jsx(value),
+            Expr::New(new) => new
+                .args
+                .as_deref()
+                .is_some_and(|args| self.collect_args_sources(args, kind, sources)),
+            Expr::Array(array) => array
+                .elems
+                .iter()
+                .flatten()
+                .fold(false, |contains_jsx, elem| {
+                    self.collect_value_sources(&elem.expr, kind, sources) | contains_jsx
+                }),
+            Expr::Object(object) => object.props.iter().fold(false, |contains_jsx, prop| {
+                let value_contains_jsx = match prop {
+                    PropOrSpread::Spread(spread) => {
+                        self.collect_value_sources(&spread.expr, kind, sources)
                     }
+                    PropOrSpread::Prop(prop) => match prop.as_ref() {
+                        Prop::KeyValue(key_value) => {
+                            self.collect_value_sources(&key_value.value, kind, sources)
+                        }
+                        Prop::Shorthand(ident) => {
+                            sources.push((ident.to_id(), kind));
+                            false
+                        }
+                        _ => false,
+                    },
+                    #[cfg(swc_ast_unknown)]
                     _ => false,
-                },
-                #[cfg(swc_ast_unknown)]
-                _ => false,
-            };
-            value_contains_jsx | contains_jsx
-        }),
-        _ => false,
+                };
+                value_contains_jsx | contains_jsx
+            }),
+            _ => false,
+        }
     }
-}
 
-fn collect_args_sources(args: &[ExprOrSpread], sources: &mut Vec<Id>) -> bool {
-    args.iter().fold(false, |contains_jsx, arg| {
-        collect_value_sources(&arg.expr, sources) | contains_jsx
-    })
+    fn collect_args_sources(
+        &self,
+        args: &[ExprOrSpread],
+        kind: SourceKind,
+        sources: &mut Vec<(Id, SourceKind)>,
+    ) -> bool {
+        args.iter().fold(false, |contains_jsx, arg| {
+            self.collect_value_sources(&arg.expr, kind, sources) | contains_jsx
+        })
+    }
+
+    fn collect_jsx_element_sources(
+        &self,
+        element: &JSXElement,
+        kind: SourceKind,
+        sources: &mut Vec<(Id, SourceKind)>,
+    ) {
+        // Nothing inside an <svg> is annotated, so JSX it renders isn't a root
+        if is_svg_element_name(&element.opening.name) {
+            return;
+        }
+        // Props render inside the element like its children, e.g. `header={t0}`
+        for attr in &element.opening.attrs {
+            match attr {
+                JSXAttrOrSpread::JSXAttr(JSXAttr {
+                    value: Some(value), ..
+                }) => match value {
+                    JSXAttrValue::JSXExprContainer(JSXExprContainer {
+                        expr: JSXExpr::Expr(expr),
+                        ..
+                    }) => {
+                        self.collect_value_sources(expr, SourceKind::Child, sources);
+                    }
+                    JSXAttrValue::JSXElement(element) => {
+                        self.collect_jsx_element_sources(element, SourceKind::Child, sources);
+                    }
+                    JSXAttrValue::JSXFragment(fragment) => {
+                        self.collect_jsx_child_sources(
+                            &fragment.children,
+                            SourceKind::Child,
+                            sources,
+                        );
+                    }
+                    _ => {}
+                },
+                JSXAttrOrSpread::SpreadElement(spread) => {
+                    self.collect_value_sources(&spread.expr, SourceKind::Child, sources);
+                }
+                _ => {}
+            }
+        }
+        // A fragment's children render in its place, an element's as its children
+        let kind = if (self.is_fragment)(&element.opening.name) {
+            kind
+        } else {
+            SourceKind::Child
+        };
+        self.collect_jsx_child_sources(&element.children, kind, sources);
+    }
+
+    fn collect_jsx_child_sources(
+        &self,
+        children: &[JSXElementChild],
+        kind: SourceKind,
+        sources: &mut Vec<(Id, SourceKind)>,
+    ) {
+        for child in children {
+            match child {
+                JSXElementChild::JSXExprContainer(container) => {
+                    if let JSXExpr::Expr(expr) = &container.expr {
+                        self.collect_value_sources(expr, kind, sources);
+                    }
+                }
+                JSXElementChild::JSXSpreadChild(spread) => {
+                    self.collect_value_sources(&spread.expr, kind, sources);
+                }
+                JSXElementChild::JSXElement(element) => {
+                    self.collect_jsx_element_sources(element, kind, sources);
+                }
+                JSXElementChild::JSXFragment(fragment) => {
+                    self.collect_jsx_child_sources(&fragment.children, kind, sources);
+                }
+                JSXElementChild::JSXText(_) => {}
+                #[cfg(swc_ast_unknown)]
+                _ => {}
+            }
+        }
+    }
 }
 
 fn contains_jsx(expr: &Expr) -> bool {
@@ -278,38 +439,7 @@ fn contains_jsx(expr: &Expr) -> bool {
     finder.found
 }
 
-fn collect_jsx_element_sources(element: &JSXElement, sources: &mut Vec<Id>) {
-    // Nothing inside an <svg> is annotated, so JSX it renders isn't a root
-    if !is_svg_element_name(&element.opening.name) {
-        collect_jsx_child_sources(&element.children, sources);
-    }
-}
-
-fn collect_jsx_child_sources(children: &[JSXElementChild], sources: &mut Vec<Id>) {
-    for child in children {
-        match child {
-            JSXElementChild::JSXExprContainer(container) => {
-                if let JSXExpr::Expr(expr) = &container.expr {
-                    collect_value_sources(expr, sources);
-                }
-            }
-            JSXElementChild::JSXSpreadChild(spread) => {
-                collect_value_sources(&spread.expr, sources);
-            }
-            JSXElementChild::JSXElement(element) => {
-                collect_jsx_element_sources(element, sources);
-            }
-            JSXElementChild::JSXFragment(fragment) => {
-                collect_jsx_child_sources(&fragment.children, sources);
-            }
-            JSXElementChild::JSXText(_) => {}
-            #[cfg(swc_ast_unknown)]
-            _ => {}
-        }
-    }
-}
-
-impl Visit for ReturnRootDefinitionCollector {
+impl Visit for ReturnRootDefinitionCollector<'_> {
     noop_visit_type!();
 
     fn visit_arrow_expr(&mut self, _: &ArrowExpr) {}
@@ -320,9 +450,9 @@ impl Visit for ReturnRootDefinitionCollector {
         if is_svg_element_name(&element.opening.name) {
             let before = self.definitions.len();
             let mut sources = Vec::new();
-            collect_jsx_child_sources(&element.children, &mut sources);
+            self.collect_jsx_child_sources(&element.children, SourceKind::Value, &mut sources);
             self.svg_values
-                .extend(sources.into_iter().map(|source| (source, before)));
+                .extend(sources.into_iter().map(|(source, _)| (source, before)));
         }
         element.visit_children_with(self);
     }
@@ -356,25 +486,36 @@ impl Visit for ReturnRootDefinitionCollector {
     }
 }
 
-fn return_root_definitions_from_function_body(body: &FunctionBody) -> ReturnRootDefinitions {
-    let mut collector = ReturnRootDefinitionCollector::default();
+fn return_root_definitions_from_function_body(
+    body: &FunctionBody,
+    is_fragment: &dyn Fn(&JSXElementName) -> bool,
+) -> ReturnRootDefinitions {
+    let mut collector = ReturnRootDefinitionCollector::new(is_fragment);
     body.visit_with(&mut collector);
     collector.finish()
 }
 
-fn return_root_definitions_from_function(function: &Function) -> ReturnRootDefinitions {
+fn return_root_definitions_from_function(
+    function: &Function,
+    is_fragment: &dyn Fn(&JSXElementName) -> bool,
+) -> ReturnRootDefinitions {
     function
         .body
         .as_ref()
-        .map(return_root_definitions_from_function_body)
+        .map(|body| return_root_definitions_from_function_body(body, is_fragment))
         .unwrap_or_default()
 }
 
-fn return_root_definitions_from_arrow(arrow_expr: &ArrowExpr) -> ReturnRootDefinitions {
+fn return_root_definitions_from_arrow(
+    arrow_expr: &ArrowExpr,
+    is_fragment: &dyn Fn(&JSXElementName) -> bool,
+) -> ReturnRootDefinitions {
     match arrow_expr.body.as_ref() {
-        ArrowFunctionBody::FunctionBody(body) => return_root_definitions_from_function_body(body),
+        ArrowFunctionBody::FunctionBody(body) => {
+            return_root_definitions_from_function_body(body, is_fragment)
+        }
         ArrowFunctionBody::Expr(expr) => {
-            let mut collector = ReturnRootDefinitionCollector::default();
+            let mut collector = ReturnRootDefinitionCollector::new(is_fragment);
             expr.visit_with(&mut collector);
             collector.add_returned_value(expr);
             collector.finish()
@@ -442,7 +583,8 @@ pub struct ReactComponentAnnotateVisitor {
     /// entered from rendered output, like a `.map` inside returned JSX.
     callback_render_owner: Option<Atom>,
     /// Owner transparent callsites fall back to right now. Only set while visiting
-    /// what a render callback returns, so other JSX in its body stays unowned.
+    /// what a render callback returns, so other JSX in its body stays unowned, or
+    /// JSX the compiler cached for a returned element.
     active_callback_owner: Option<Atom>,
     /// React Compiler outlines callbacks into module-level `_temp` helpers. Maps each
     /// helper to the component that rendered it, or `None` when more than one did.
@@ -1179,14 +1321,15 @@ impl ReactComponentAnnotateVisitor {
         let prev_return_component = self.current_return_component_name.replace(component_name);
         let prev_component = self.current_component_name.take();
         let prev_fragment_child_component = self.fragment_child_component_name.take();
-        let prev_return_root_definitions = std::mem::replace(
-            &mut self.return_root_definitions,
-            if self.react_compiler_enabled {
-                return_root_definitions_from_function(func)
-            } else {
-                ReturnRootDefinitions::default()
-            },
-        );
+        let return_root_definitions = if self.react_compiler_enabled {
+            return_root_definitions_from_function(func, &|name| {
+                self.is_react_fragment_element_name(name)
+            })
+        } else {
+            ReturnRootDefinitions::default()
+        };
+        let prev_return_root_definitions =
+            std::mem::replace(&mut self.return_root_definitions, return_root_definitions);
 
         self.jsx_bindings
             .push_function_with(collect_function_param_scope(&func.params));
@@ -1216,14 +1359,15 @@ impl ReactComponentAnnotateVisitor {
         let prev_return_component = self.current_return_component_name.replace(component_name);
         let prev_component = self.current_component_name.take();
         let prev_fragment_child_component = self.fragment_child_component_name.take();
-        let prev_return_root_definitions = std::mem::replace(
-            &mut self.return_root_definitions,
-            if self.react_compiler_enabled {
-                return_root_definitions_from_arrow(arrow_expr)
-            } else {
-                ReturnRootDefinitions::default()
-            },
-        );
+        let return_root_definitions = if self.react_compiler_enabled {
+            return_root_definitions_from_arrow(arrow_expr, &|name| {
+                self.is_react_fragment_element_name(name)
+            })
+        } else {
+            ReturnRootDefinitions::default()
+        };
+        let prev_return_root_definitions =
+            std::mem::replace(&mut self.return_root_definitions, return_root_definitions);
 
         self.jsx_bindings
             .push_function_with(collect_pat_list_scope(&arrow_expr.params));
@@ -1265,10 +1409,11 @@ impl ReactComponentAnnotateVisitor {
         self.fragment_child_component_name = prev_fragment_child_component;
     }
 
-    /// Visits a compiled definition of JSX the component returns or an `<svg>` renders
+    /// Visits a compiled definition in the place the component renders it
     fn visit_compiled_definition(&mut self, value: &mut Expr, role: DefinitionRole) {
         match role {
             DefinitionRole::ReturnRoot => self.visit_component_return_expr(value),
+            DefinitionRole::ReturnChild => self.visit_return_child_expr(value),
             DefinitionRole::SvgContent => {
                 let prev_in_svg = std::mem::replace(&mut self.in_svg, true);
                 value.visit_mut_with(self);
@@ -1276,6 +1421,20 @@ impl ReactComponentAnnotateVisitor {
             }
             DefinitionRole::Other => value.visit_mut_with(self),
         }
+    }
+
+    /// Visits JSX the compiler cached out of a returned element's children or
+    /// props. Like the element's other children it gets no component name, and
+    /// transparent callsites in it still take the component as their owner. The
+    /// owner isn't passed as a fragment owner, so a fragment kept in a variable,
+    /// like a tooltip title, doesn't put the component name on its children.
+    fn visit_return_child_expr(&mut self, expr: &mut Expr) {
+        let prev_active_owner = std::mem::replace(
+            &mut self.active_callback_owner,
+            self.current_return_component_name.clone(),
+        );
+        expr.visit_mut_with(self);
+        self.active_callback_owner = prev_active_owner;
     }
 
     /// Visits what a callback returns with the owner its render context lends it.
