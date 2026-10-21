@@ -237,6 +237,18 @@ fn test_ignored_components_config() {
 }
 
 #[test]
+fn test_plugin_config_from_json() {
+    // Hosts send `null` for an `undefined` plugin config
+    let config = PluginConfig::from_json("null").unwrap();
+    assert_eq!(config.component_attr_name(), "data-component");
+
+    let error = PluginConfig::from_json(r#"{"transparent-components": "Flex"}"#).unwrap_err();
+    assert!(error
+        .to_string()
+        .starts_with(r#"invalid type: string "Flex", expected a sequence"#));
+}
+
+#[test]
 fn test_ignored_components_functionality() {
     use swc_core::common::FileName;
     use swc_plugin_component_annotate::{config::PluginConfig, ReactComponentAnnotateVisitor};

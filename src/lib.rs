@@ -14,7 +14,7 @@ use path_utils::{extract_absolute_path, extract_filename};
 use rustc_hash::{FxHashMap, FxHashSet};
 use styled::{styled_call_component_ref, transform_styled_call, StyledTransformAttrs};
 use swc_core::{
-    common::{FileName, DUMMY_SP},
+    common::{errors::HANDLER, FileName, DUMMY_SP},
     ecma::{
         ast::*,
         atoms::Atom,
@@ -1575,10 +1575,23 @@ pub fn process_transform(
     mut program: Program,
     metadata: TransformPluginProgramMetadata,
 ) -> Program {
-    let config = if let Some(config_str) = metadata.get_transform_plugin_config() {
-        serde_json::from_str::<PluginConfig>(&config_str).unwrap_or_default()
-    } else {
-        PluginConfig::default()
+    let config = match metadata
+        .get_transform_plugin_config()
+        .map_or(Ok(PluginConfig::default()), |config| {
+            PluginConfig::from_json(&config)
+        }) {
+        Ok(config) => config,
+        Err(error) => {
+            // Falling back to the defaults would silently change every attribute
+            // name. Fail through SWC's handler, since a panic in wasm loses its
+            // message and the host blames an `swc_core` version mismatch instead.
+            HANDLER.with(|handler| {
+                handler.err(&format!(
+                    "swc-plugin-component-annotate: invalid config: {error}"
+                ));
+            });
+            return program;
+        }
     };
 
     // Try to get the actual filename from the metadata context

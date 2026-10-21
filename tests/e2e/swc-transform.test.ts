@@ -30,6 +30,13 @@ test("passes plugin config through the SWC wasm boundary", () => {
   assert.match(code, /"data-sentry-source-file": "Button\.jsx"/);
 });
 
+test("fails on an invalid config instead of falling back to the defaults", () => {
+  assert.throws(
+    () => transform(`function Button() { return <button />; }`, {"transparent-components": "Flex"}),
+    /swc-plugin-component-annotate: invalid config: invalid type: string "Flex", expected a sequence/
+  );
+});
+
 test("passes owner metadata through transparent component callsites", () => {
   const code = transform(
     `

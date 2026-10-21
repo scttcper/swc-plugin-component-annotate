@@ -94,6 +94,8 @@ Add the plugin to your `.swcrc` configuration:
 
 - **`rewrite-emotion-styled`** (boolean, default: `false`, experimental): Rewrites `const StyledButton = styled(Button)` (with `styled` from `@emotion/styled`) so the rendered `Button` gets `data-element="StyledButton"` plus the source attributes.
 
+An option with the wrong type, like `"transparent-components": "Flex"`, fails the build with `swc-plugin-component-annotate: invalid config: ...` rather than falling back to the defaults.
+
 ### Sentry Integration
 
 To use Sentry-specific attribute names for compatibility with Sentry's tracking:

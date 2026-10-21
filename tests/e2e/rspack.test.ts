@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import {mkdtemp, readFile, rm, writeFile} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import path from "node:path";
-import {test} from "node:test";
+import {test, type TestContext} from "node:test";
 
 import {
   rspack,
@@ -10,6 +10,8 @@ import {
   type Configuration,
   type Stats,
 } from "@rspack/core";
+
+import type {PluginConfig} from "./helpers.ts";
 
 const pluginPath = path.resolve(
   "target/wasm32-unknown-unknown/release/swc_plugin_component_annotate.wasm"
@@ -32,7 +34,8 @@ function runCompiler(compiler: Compiler): Promise<Stats> {
   });
 }
 
-test("runs through Rspack's built-in SWC loader", async t => {
+/** Bundle a `Button` component through Rspack's built-in SWC loader. */
+async function build(t: TestContext, pluginConfig: PluginConfig) {
   const fixtureDirectory = await mkdtemp(
     path.join(tmpdir(), "swc-plugin-component-annotate-rspack-")
   );
@@ -67,7 +70,7 @@ test("runs through Rspack's built-in SWC loader", async t => {
               jsc: {
                 parser: {syntax: "ecmascript", jsx: true},
                 transform: {react: {runtime: "classic"}},
-                experimental: {plugins: [[pluginPath, {}]]},
+                experimental: {plugins: [[pluginPath, pluginConfig]]},
               },
             },
           },
@@ -80,13 +83,27 @@ test("runs through Rspack's built-in SWC loader", async t => {
   };
 
   const stats = await runCompiler(rspack(config));
+  return {stats, bundlePath: path.join(outputPath, "bundle.js")};
+}
+
+test("runs through Rspack's built-in SWC loader", async t => {
+  const {stats, bundlePath} = await build(t, {});
   assert.equal(
     stats.hasErrors(),
     false,
     stats.toString({all: false, errors: true, errorDetails: true})
   );
 
-  const bundle = await readFile(path.join(outputPath, "bundle.js"), "utf8");
+  const bundle = await readFile(bundlePath, "utf8");
   assert.match(bundle, /"data-component": "Button"/);
   assert.match(bundle, /"data-source-file": "Button\.jsx"/);
+});
+
+test("fails the Rspack build on an invalid config", async t => {
+  const {stats} = await build(t, {"transparent-components": "Flex"});
+
+  assert.match(
+    stats.toString({all: false, errors: true}),
+    /swc-plugin-component-annotate: invalid config: invalid type: string "Flex", expected a sequence/
+  );
 });
