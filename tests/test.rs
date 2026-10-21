@@ -11,7 +11,7 @@ use swc_core::{
         visit::visit_mut_pass,
     },
 };
-use swc_plugin_component_annotate::{config::PluginConfig, ReactComponentAnnotateVisitor};
+use swc_plugin_component_annotate::{ReactComponentAnnotateVisitor, config::PluginConfig};
 
 fn tr_with_config_and_filename(config: PluginConfig, filename: FileName) -> impl Pass {
     let unresolved_mark = Mark::new();
@@ -227,19 +227,37 @@ fn test_ignored_components_config() {
 
     let parsed_config: PluginConfig = serde_json::from_str(json_config).unwrap();
     assert_eq!(parsed_config.ignored_components.len(), 2);
-    assert!(parsed_config
-        .ignored_components
-        .contains(&"TestComponent".to_string()));
-    assert!(parsed_config
-        .ignored_components
-        .contains(&"AnotherComponent".to_string()));
+    assert!(
+        parsed_config
+            .ignored_components
+            .contains(&"TestComponent".to_string())
+    );
+    assert!(
+        parsed_config
+            .ignored_components
+            .contains(&"AnotherComponent".to_string())
+    );
     assert!(!parsed_config.native);
+}
+
+#[test]
+fn test_plugin_config_from_json() {
+    // Hosts send `null` for an `undefined` plugin config
+    let config = PluginConfig::from_json("null").unwrap();
+    assert_eq!(config.component_attr_name(), "data-component");
+
+    let error = PluginConfig::from_json(r#"{"transparent-components": "Flex"}"#).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .starts_with(r#"invalid type: string "Flex", expected a sequence"#)
+    );
 }
 
 #[test]
 fn test_ignored_components_functionality() {
     use swc_core::common::FileName;
-    use swc_plugin_component_annotate::{config::PluginConfig, ReactComponentAnnotateVisitor};
+    use swc_plugin_component_annotate::{ReactComponentAnnotateVisitor, config::PluginConfig};
 
     let config = PluginConfig {
         ignored_components: vec!["IgnoredComponent".to_string()],
@@ -273,19 +291,27 @@ fn test_plugin_config_parsing() {
 
     // Verify all configuration options are parsed correctly
     assert_eq!(parsed_config.ignored_components.len(), 2);
-    assert!(parsed_config
-        .ignored_components
-        .contains(&"TestIgnored".to_string()));
-    assert!(parsed_config
-        .ignored_components
-        .contains(&"AnotherIgnored".to_string()));
+    assert!(
+        parsed_config
+            .ignored_components
+            .contains(&"TestIgnored".to_string())
+    );
+    assert!(
+        parsed_config
+            .ignored_components
+            .contains(&"AnotherIgnored".to_string())
+    );
     assert_eq!(parsed_config.transparent_components.len(), 2);
-    assert!(parsed_config
-        .transparent_components
-        .contains(&"Container".to_string()));
-    assert!(parsed_config
-        .transparent_components
-        .contains(&"Flex".to_string()));
+    assert!(
+        parsed_config
+            .transparent_components
+            .contains(&"Container".to_string())
+    );
+    assert!(
+        parsed_config
+            .transparent_components
+            .contains(&"Flex".to_string())
+    );
     assert!(parsed_config.native);
     assert_eq!(
         parsed_config.component_attr,

@@ -3,7 +3,7 @@ import {transformSync, type Options} from "@swc/core";
 
 export type PluginConfig = Record<string, unknown>;
 
-const pluginPath = path.resolve(
+export const pluginPath = path.resolve(
   "target/wasm32-unknown-unknown/release/swc_plugin_component_annotate.wasm"
 );
 

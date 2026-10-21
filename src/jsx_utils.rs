@@ -19,12 +19,17 @@ pub fn get_element_name(element: &JSXElementName) -> Option<Cow<'_, str>> {
     }
 }
 
-/// Element names that say nothing about what rendered: polymorphic `<Component>`
-/// tags and members of local values like `<field.Switch>`, which the React
+/// Element names that say nothing about what rendered: intrinsic tags like
+/// `<div>` or `<path>`, which the DOM already shows, polymorphic `<Component>`
+/// tags, and members of local values like `<field.Switch>`, which the React
 /// Compiler can also rename (`field_5.Switch`).
 pub fn is_noise_element_name(element: &JSXElementName) -> bool {
     match element {
-        JSXElementName::Ident(ident) => &*ident.sym == "Component",
+        // JSX compiles lowercase and namespaced tags to strings, never components
+        JSXElementName::Ident(ident) => {
+            ident.sym.starts_with(|c: char| c.is_ascii_lowercase()) || &*ident.sym == "Component"
+        }
+        JSXElementName::JSXNamespacedName(_) => true,
         JSXElementName::JSXMemberExpr(member_expr) => {
             let mut obj = &member_expr.obj;
             loop {
@@ -38,8 +43,16 @@ pub fn is_noise_element_name(element: &JSXElementName) -> bool {
                 }
             }
         }
+        #[cfg(swc_ast_unknown)]
         _ => false,
     }
+}
+
+/// `<svg>` contents are drawing internals, like paths and groups, that don't say
+/// what was clicked
+#[inline]
+pub fn is_svg_element_name(element: &JSXElementName) -> bool {
+    matches!(element, JSXElementName::Ident(ident) if &*ident.sym == "svg")
 }
 
 /// Recursively build the name for member expressions (e.g., "Components.UI.Button")

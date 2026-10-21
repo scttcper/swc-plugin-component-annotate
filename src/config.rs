@@ -37,6 +37,12 @@ pub struct PluginConfig {
 }
 
 impl PluginConfig {
+    /// Parses the config the host passes. Hosts send `null` for an `undefined`
+    /// config, which means the defaults.
+    pub fn from_json(config: &str) -> serde_json::Result<Self> {
+        serde_json::from_str::<Option<Self>>(config).map(Option::unwrap_or_default)
+    }
+
     pub fn component_attr_name(&self) -> &str {
         if let Some(ref custom) = self.component_attr {
             custom

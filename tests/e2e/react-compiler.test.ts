@@ -433,3 +433,158 @@ test("only owns what render callbacks return", () => {
   assert.match(code, /id: "rendered",\s+"data-sentry-component": "App-Button"/);
   assert.doesNotMatch(code, /id: "registered",\s+"data-sentry-component"/);
 });
+
+test("skips JSX the compiler hoists out of an svg", () => {
+  const code = transform(
+    `
+      function Icon(props) {
+        return (
+          <svg viewBox="0 0 16 16" {...props}>
+            <g><path d="M0 0L16 16" /></g>
+            <Mark />
+          </svg>
+        );
+      }
+
+      function Chart({points}) {
+        return <svg>{points.map((point) => <Dot key={point} />)}</svg>;
+      }
+    `,
+    sentryConfig,
+    reactCompiler
+  );
+
+  // The svg children are cached ahead of it and the callback becomes a `_temp`
+  // helper, so none of them are inside the svg by the time the plugin runs
+  assert.match(code, /t\d+ = \/\*#__PURE__\*\/ _jsx\(Mark, \{\}\)/);
+  assert.match(code, /function _temp\(point\) \{\s+return \/\*#__PURE__\*\/ _jsx\(Dot, \{\}, point\)/);
+  assert.equal(code.match(/"data-sentry-source-file"/g)?.length, 2);
+  assert.match(code, /"data-sentry-component": "Icon"/);
+  assert.match(code, /"data-sentry-component": "Chart"/);
+  assert.doesNotMatch(code, /"data-sentry-element"/);
+});
+
+test("skips every branch the compiler picks for an svg", () => {
+  const code = transform(
+    `
+      function Shape({filled, kind}) {
+        let shape;
+        if (filled) {
+          shape = <Circle />;
+        } else {
+          shape = <Rect />;
+        }
+
+        let mark;
+        switch (kind) {
+          case "dot":
+            mark = <Dot />;
+            break;
+          default:
+            mark = <Cross />;
+        }
+
+        return <svg>{shape}{mark}</svg>;
+      }
+    `,
+    sentryConfig,
+    reactCompiler
+  );
+
+  // Each branch is cached on its own, then assigned to the binding the svg renders
+  assert.equal(code.match(/shape = t\d+;/g)?.length, 2);
+  assert.equal(code.match(/mark = t\d+;/g)?.length, 2);
+  assert.match(code, /"data-sentry-component": "Shape"/);
+  assert.equal(code.match(/"data-sentry-source-file"/g)?.length, 1);
+  assert.doesNotMatch(code, /"data-sentry-element"/);
+});
+
+test("annotates JSX cached out of a returned element like an uncompiled child", () => {
+  const source = `
+    import {Fragment} from "react";
+
+    function Parent({label}) {
+      return (
+        <div>
+          <Child />
+          <span className="label" />
+          <Flex>{label}</Flex>
+        </div>
+      );
+    }
+
+    function Wrapper({label}) {
+      return (
+        <Fragment>
+          {label}
+          <Other />
+        </Fragment>
+      );
+    }
+  `;
+  const config = {...sentryConfig, "transparent-components": ["Flex"]};
+
+  for (const swcOptions of [{jsc: {transform: {react: {runtime: "automatic"}}}}, reactCompiler] as const) {
+    const code = transform(source, config, swcOptions);
+
+    // A returned element's children only get their own name, and transparent
+    // callsites among them still take the component as their owner
+    assert.match(code, /_jsx\(Child, \{\s+"data-sentry-element": "Child",\s+"data-sentry-source-file": "Button\.jsx"\s+\}\)/);
+    assert.match(code, /_jsx\("span", \{\s+className: "label"\s+\}\)/);
+    assert.match(code, /"data-sentry-component": "Parent-Flex"/);
+    // A fragment's children render in its place, so they're roots
+    assert.match(code, /_jsx\(Other, \{\s+"data-sentry-element": "Other",\s+"data-sentry-component": "Wrapper"/);
+  }
+
+  // The compiler caches the static children apart from what they're rendered in
+  const compiled = transform(source, config, reactCompiler);
+  assert.match(compiled, /t\d+ = \/\*#__PURE__\*\/ _jsx\(Child, \{/);
+  assert.match(compiled, /t\d+ = \/\*#__PURE__\*\/ _jsx\(Other, \{/);
+});
+
+test("annotates JSX cached out of a returned element's props like its children", () => {
+  const source = `
+    import {Fragment} from "react";
+
+    function Parent({label}) {
+      return <Panel header={<Flex />}>{label}</Panel>;
+    }
+
+    function Hint({children}) {
+      const title = (
+        <Fragment>
+          <Text />
+          <Flex />
+        </Fragment>
+      );
+      return <Tooltip title={title}>{children}</Tooltip>;
+    }
+
+    function Shared() {
+      const icon = <Icon />;
+      return (
+        <>
+          <Button icon={icon} />
+          <svg>{icon}</svg>
+        </>
+      );
+    }
+  `;
+  const config = {...sentryConfig, "transparent-components": ["Flex"]};
+
+  for (const swcOptions of [{jsc: {transform: {react: {runtime: "automatic"}}}}, reactCompiler] as const) {
+    const code = transform(source, config, swcOptions);
+
+    assert.match(code, /_jsx\(Flex, \{\s+"data-sentry-component": "Parent-Flex"/);
+    // Rendered through a prop as well as the svg, so it keeps its name
+    assert.match(code, /_jsx\(Icon, \{\s+"data-sentry-element": "Icon",\s+"data-sentry-source-file": "Button\.jsx"\s+\}\)/);
+    // A fragment inside a prop doesn't hand the component name to its children
+    assert.match(code, /_jsx\(Text, \{\s+"data-sentry-element": "Text",\s+"data-sentry-source-file": "Button\.jsx"\s+\}\)/);
+  }
+
+  const compiled = transform(source, config, reactCompiler);
+  assert.match(compiled, /t\d+ = \/\*#__PURE__\*\/ _jsx\(Flex, \{/);
+  assert.match(compiled, /t\d+ = \/\*#__PURE__\*\/ _jsx\(Icon, \{/);
+  // The compiler traces the title into the prop, so Flex gets an owner here
+  assert.match(compiled, /_jsx\(Flex, \{\s+"data-sentry-component": "Hint-Flex"/);
+});

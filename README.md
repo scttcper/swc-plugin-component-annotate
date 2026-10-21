@@ -7,8 +7,8 @@ A SWC plugin that automatically annotates React components with data attributes 
 This plugin transforms React components by adding data attributes that help with tracking and debugging. It automatically identifies React components (function components, arrow function components, and class components) and adds the following attributes:
 
 - `data-component`: The component name (added to root elements)
-- `data-element`: The element/component name (added to non-HTML elements)
-- `data-source-file`: The source filename
+- `data-element`: The name of a rendered component, like `Button` (left off tags like `div`)
+- `data-source-file`: The source filename (left off when the host passes none)
 
 ## Features
 
@@ -18,7 +18,7 @@ This plugin transforms React components by adding data attributes that help with
 - ✅ **React Fragments**: Supports `Fragment`, `React.Fragment`, and `<>` syntax
 - ✅ **Nested Components**: Properly handles component hierarchies
 - ✅ **React Native Support**: Uses camelCase attributes when configured
-- ✅ **Configurable**: Ignore specific components, annotate fragments, etc.
+- ✅ **Configurable**: Custom attribute names, ignored components, and transparent wrappers
 
 ## Installation
 
@@ -93,6 +93,8 @@ Add the plugin to your `.swcrc` configuration:
 - **`source-path-attr`** (string, optional): Adds the file's full path under this attribute name. It's only emitted when set, so leave it out of production builds to keep bundles small.
 
 - **`rewrite-emotion-styled`** (boolean, default: `false`, experimental): Rewrites `const StyledButton = styled(Button)` (with `styled` from `@emotion/styled`) so the rendered `Button` gets `data-element="StyledButton"` plus the source attributes.
+
+An option with the wrong type, like `"transparent-components": "Flex"`, fails the build with `swc-plugin-component-annotate: invalid config: ...` rather than falling back to the defaults.
 
 ### Sentry Integration
 
@@ -200,12 +202,14 @@ Whether to include components such as `Button`, `Link`, `Checkbox`, or `MenuItem
 
 Use `ignored-components` only when a component should not participate in annotation at all. Ignored components get no generated attributes. Use `transparent-components` when a component should still receive useful owner metadata, but should not report itself as `data-sentry-element`.
 
-#### Names that are left out
+#### What's left out
 
 Names that wouldn't tell you what rendered are dropped rather than replaced, so the nearest real component gets reported instead:
 
 - Only PascalCase functions count as components. Helpers that return JSX, like `renderRow` or `getIcon`, don't add `data-sentry-component`.
+- Lowercase tags, like `<div>`, `<path>` or `<my-element>`, don't get `data-sentry-element`. The DOM already shows the tag.
 - Polymorphic `<Component>` tags and members of local values, like `<field.Switch>`, don't get `data-sentry-element`. Members of component namespaces, like `<Fields.Switch>`, keep theirs.
+- Nothing inside an `<svg>` gets attributes, including components and callbacks rendered there. Paths and shapes don't say what was clicked. The `<svg>` itself is annotated like any other tag.
 
 ## Examples
 
@@ -271,8 +275,8 @@ With `"native": true`:
 // Output
 const MyComponent = () => {
   return (
-    <View dataComponent="MyComponent" dataSourceFile="MyComponent.jsx">
-      <Text>Hello World</Text>
+    <View dataElement="View" dataComponent="MyComponent" dataSourceFile="MyComponent.jsx">
+      <Text dataElement="Text" dataSourceFile="MyComponent.jsx">Hello World</Text>
     </View>
   );
 };

@@ -1,7 +1,7 @@
 [package]
 authors     = ["scttcper <scttcper@gmail.com>"]
 description = "[SWC plugin] Automatically annotate React components with data attributes for component tracking"
-edition     = "2021"
+edition     = "2024"
 homepage    = "https://github.com/scttcper/swc-plugin-component-annotate"
 keywords    = ["swc-plugin", "swc", "react", "jsx", "component", "tracking", "annotation"]
 license     = "MIT"
