@@ -49,8 +49,8 @@ jobs:
       - name: Build
         run: node --run build
       - name: Update npm
-        run: npm install --global npm@latest
+        run: npm install --global npm@11.21.1
       - name: Release
-        run: npx --yes semantic-release@latest
+        run: npx --yes semantic-release@25.0.9
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
