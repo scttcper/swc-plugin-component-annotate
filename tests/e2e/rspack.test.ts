@@ -12,7 +12,7 @@ import {
   type Stats,
 } from "@rspack/core";
 
-import {pluginPath, type PluginConfig} from "./helpers.ts";
+import {pluginPath, sentryConfig, type PluginConfig} from "./helpers.ts";
 
 function runCompiler(compiler: Compiler): Promise<Stats> {
   return new Promise((resolve, reject) => {
@@ -107,6 +107,38 @@ test("leaves out source attributes when Rspack's SWC has no filename", () => {
 
   assert.match(code, /"data-component": "Button"/);
   assert.doesNotMatch(code, /data-source-file/);
+});
+
+test("skips JSX the React Compiler hoists out of an svg in Rspack's SWC", () => {
+  const {code} = experiments.swc.transformSync(
+    `
+      function Icon(props) {
+        return (
+          <svg viewBox="0 0 16 16" {...props}>
+            <g><path d="M0 0L16 16" /></g>
+            <Mark />
+          </svg>
+        );
+      }
+
+      function Chart({points}) {
+        return <svg>{points.map((point) => <Dot key={point} />)}</svg>;
+      }
+    `,
+    {
+      filename: path.resolve("Icon.jsx"),
+      jsc: {
+        parser: {syntax: "ecmascript", jsx: true},
+        transform: {react: {runtime: "automatic"}, reactCompiler: true},
+        experimental: {plugins: [[pluginPath, sentryConfig]]},
+      },
+    }
+  );
+
+  assert.match(code, /t\d+ = \/\*#__PURE__\*\/ _jsx\(Mark, \{\}\)/);
+  assert.match(code, /function _temp\(point\) \{\s+return \/\*#__PURE__\*\/ _jsx\(Dot, \{\}, point\)/);
+  assert.equal(code.match(/"data-sentry-source-file"/g)?.length, 2);
+  assert.doesNotMatch(code, /"data-sentry-element"/);
 });
 
 test("fails the Rspack build on an invalid config", async t => {

@@ -463,3 +463,38 @@ test("skips JSX the compiler hoists out of an svg", () => {
   assert.match(code, /"data-sentry-component": "Chart"/);
   assert.doesNotMatch(code, /"data-sentry-element"/);
 });
+
+test("skips every branch the compiler picks for an svg", () => {
+  const code = transform(
+    `
+      function Shape({filled, kind}) {
+        let shape;
+        if (filled) {
+          shape = <Circle />;
+        } else {
+          shape = <Rect />;
+        }
+
+        let mark;
+        switch (kind) {
+          case "dot":
+            mark = <Dot />;
+            break;
+          default:
+            mark = <Cross />;
+        }
+
+        return <svg>{shape}{mark}</svg>;
+      }
+    `,
+    sentryConfig,
+    reactCompiler
+  );
+
+  // Each branch is cached on its own, then assigned to the binding the svg renders
+  assert.equal(code.match(/shape = t\d+;/g)?.length, 2);
+  assert.equal(code.match(/mark = t\d+;/g)?.length, 2);
+  assert.match(code, /"data-sentry-component": "Shape"/);
+  assert.equal(code.match(/"data-sentry-source-file"/g)?.length, 1);
+  assert.doesNotMatch(code, /"data-sentry-element"/);
+});

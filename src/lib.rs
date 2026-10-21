@@ -124,39 +124,50 @@ impl ReturnRootDefinitionCollector {
             .extend(sources.into_iter().map(|source| (source, before)));
     }
 
-    fn resolve(&self, binding: &Id, before: DefinitionId, resolved: &mut FxHashSet<DefinitionId>) {
-        let Some(definition) = self
+    /// With `every_branch`, follows every earlier definition instead of only the
+    /// latest, so a value picked in `if` or `switch` branches counts from each one
+    fn resolve(
+        &self,
+        binding: &Id,
+        before: DefinitionId,
+        every_branch: bool,
+        resolved: &mut FxHashSet<DefinitionId>,
+    ) {
+        let definitions = self
             .definitions_by_binding
             .get(binding)
-            .and_then(|definitions| {
-                definitions.iter().rev().copied().find(|definition| {
-                    *definition < before
-                        && (self.definitions[*definition].contains_jsx
-                            || !self.definitions[*definition].sources.is_empty())
-                })
-            })
-        else {
-            return;
-        };
+            .into_iter()
+            .flat_map(|definitions| definitions.iter().rev().copied())
+            .filter(|&definition| {
+                definition < before
+                    && (self.definitions[definition].contains_jsx
+                        || !self.definitions[definition].sources.is_empty())
+            });
 
-        if !resolved.insert(definition) {
-            return;
-        }
-        for source in &self.definitions[definition].sources {
-            self.resolve(source, definition, resolved);
+        for definition in definitions {
+            if resolved.insert(definition) {
+                for source in &self.definitions[definition].sources {
+                    self.resolve(source, definition, every_branch, resolved);
+                }
+            }
+            if !every_branch {
+                break;
+            }
         }
     }
 
     fn finish(self) -> ReturnRootDefinitions {
         let mut roots = FxHashSet::default();
         for (binding, before) in &self.returned_values {
-            self.resolve(binding, *before, &mut roots);
+            self.resolve(binding, *before, false, &mut roots);
         }
 
-        // The compiler hoists `<svg>` children into definitions ahead of it
+        // The compiler hoists `<svg>` children into definitions ahead of it. Every
+        // branch that could be rendered there is skipped, at the cost of skipping
+        // a value reassigned after something outside the `<svg>` rendered it.
         let mut svg_contents = FxHashSet::default();
         for (binding, before) in &self.svg_values {
-            self.resolve(binding, *before, &mut svg_contents);
+            self.resolve(binding, *before, true, &mut svg_contents);
         }
         // JSX the component also returns outside an `<svg>` stays annotated
         svg_contents.retain(|definition| !roots.contains(definition));
