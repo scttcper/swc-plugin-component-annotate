@@ -594,6 +594,8 @@ pub struct ReactComponentAnnotateVisitor {
     in_svg: bool,
     /// `_temp` helpers an `<svg>` renders, which get no attributes either
     svg_temp_helpers: FxHashSet<Atom>,
+    /// Tags the React Compiler hoisted into `T0`-style bindings, by binding
+    compiler_tag_aliases: FxHashMap<Id, JSXElementName>,
 }
 
 impl ReactComponentAnnotateVisitor {
@@ -647,6 +649,7 @@ impl ReactComponentAnnotateVisitor {
             temp_helper_owners: FxHashMap::default(),
             in_svg: false,
             svg_temp_helpers: FxHashSet::default(),
+            compiler_tag_aliases: FxHashMap::default(),
         }
     }
 
@@ -1002,7 +1005,22 @@ impl ReactComponentAnnotateVisitor {
         self.jsx_bindings.mark_unannotatable(&target.id.to_id());
     }
 
+    /// React Compiler hoists a JSX tag into a `T0`-style binding when the tag has to
+    /// be read before its props or children run, like `T0 = Flex` for `<T0>`
+    fn record_compiler_tag_alias(&mut self, target: &Ident, value: &Expr) {
+        if !self.react_compiler_enabled || !is_react_compiler_tag(target.sym.as_ref()) {
+            return;
+        }
+        // Cache restores like `T0 = $[1]` aren't tags and keep the recorded one
+        if let Some(tag) = jsx_element_name_from_expr(value) {
+            self.compiler_tag_aliases.insert(target.to_id(), tag);
+        }
+    }
+
     fn visit_var_declarator(&mut self, var_declarator: &mut VarDeclarator) {
+        if let (Pat::Ident(target), Some(init)) = (&var_declarator.name, &var_declarator.init) {
+            self.record_compiler_tag_alias(&target.id, init);
+        }
         let is_definition =
             matches!(&var_declarator.name, Pat::Ident(_)) && var_declarator.init.is_some();
         let role = if is_definition {
@@ -1251,7 +1269,19 @@ impl ReactComponentAnnotateVisitor {
             return;
         }
 
-        let Some(element_name) = get_element_name(&opening_element.name) else {
+        // A tag the compiler hoisted into `T0` is annotated like the tag it aliases
+        let tag = match &opening_element.name {
+            JSXElementName::Ident(ident) => self
+                .compiler_tag_aliases
+                .get(&ident.to_id())
+                .unwrap_or(&opening_element.name),
+            name => name,
+        };
+        if self.is_unannotatable_jsx_element_name(tag) {
+            return;
+        }
+
+        let Some(element_name) = get_element_name(tag) else {
             return;
         };
         let element_policy = self.component_annotation_policy(&element_name);
@@ -1274,7 +1304,7 @@ impl ReactComponentAnnotateVisitor {
             element_policy,
             &existing_attrs,
             transparent_owner_component_name.as_ref(),
-            !is_noise_element_name(&opening_element.name),
+            !is_noise_element_name(tag),
         ) else {
             return;
         };
@@ -1688,6 +1718,11 @@ impl VisitMut for ReactComponentAnnotateVisitor {
 
     fn visit_mut_assign_expr(&mut self, assign_expr: &mut AssignExpr) {
         self.mark_fragment_assignment(assign_expr);
+        if assign_expr.op == AssignOp::Assign
+            && let AssignTarget::Simple(SimpleAssignTarget::Ident(target)) = &assign_expr.left
+        {
+            self.record_compiler_tag_alias(&target.id, &assign_expr.right);
+        }
 
         let is_definition = assign_expr.op == AssignOp::Assign
             && matches!(
@@ -1735,6 +1770,38 @@ fn is_component_name(name: &str) -> bool {
 fn is_react_compiler_temp(name: &str) -> bool {
     name.strip_prefix("_temp")
         .is_some_and(|rest| rest.bytes().all(|byte| byte.is_ascii_digit()))
+}
+
+/// Matches the bindings the React Compiler hoists JSX tags into (`T0`, `T1`, ...)
+#[inline]
+fn is_react_compiler_tag(name: &str) -> bool {
+    name.strip_prefix('T')
+        .is_some_and(|rest| !rest.is_empty() && rest.bytes().all(|byte| byte.is_ascii_digit()))
+}
+
+/// Turns a hoisted tag like `Flex` or `form.AppForm` back into a JSX tag name
+fn jsx_element_name_from_expr(expr: &Expr) -> Option<JSXElementName> {
+    fn member_expr(member: &MemberExpr) -> Option<JSXMemberExpr> {
+        let MemberProp::Ident(prop) = &member.prop else {
+            return None;
+        };
+        let obj = match member.obj.as_ref() {
+            Expr::Ident(ident) => JSXObject::Ident(ident.clone()),
+            Expr::Member(member) => JSXObject::JSXMemberExpr(Box::new(member_expr(member)?)),
+            _ => return None,
+        };
+        Some(JSXMemberExpr {
+            span: member.span,
+            obj,
+            prop: prop.clone(),
+        })
+    }
+
+    match expr {
+        Expr::Ident(ident) => Some(JSXElementName::Ident(ident.clone())),
+        Expr::Member(member) => member_expr(member).map(JSXElementName::JSXMemberExpr),
+        _ => None,
+    }
 }
 
 #[plugin_transform]
