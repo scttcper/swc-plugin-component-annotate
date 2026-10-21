@@ -588,3 +588,37 @@ test("annotates JSX cached out of a returned element's props like its children",
   // The compiler traces the title into the prop, so Flex gets an owner here
   assert.match(compiled, /_jsx\(Flex, \{\s+"data-sentry-component": "Hint-Flex"/);
 });
+
+test("annotates a tag the compiler hoists into a T0 binding like the tag itself", () => {
+  const source = `
+    function List({items}) {
+      const seen = [];
+      return <Flex gap="md">{items.map(item => { seen.push(item); return <Cell key={item} />; })}</Flex>;
+    }
+
+    function Panels({items}) {
+      const seen = [];
+      return <Panel title="Items">{items.map(item => { seen.push(item); return <Cell key={item} />; })}</Panel>;
+    }
+
+    function Form({form}) {
+      return <form.AppForm>{form.fields.map(field => <Field key={field} />)}</form.AppForm>;
+    }
+  `;
+  const config = {...sentryConfig, "transparent-components": ["Flex"]};
+
+  for (const swcOptions of [{jsc: {transform: {react: {runtime: "automatic"}}}}, reactCompiler] as const) {
+    const code = transform(source, config, swcOptions);
+
+    assert.match(code, /"data-sentry-component": "List-Flex"/);
+    assert.match(code, /"data-sentry-element": "Panel",\s+"data-sentry-component": "Panels"/);
+    assert.match(code, /"data-sentry-component": "Form"/);
+    assert.doesNotMatch(code, /"data-sentry-element": "(T\d+|Flex|form\.AppForm)"/);
+  }
+
+  // Children with side effects make the compiler evaluate the tag first
+  const compiled = transform(source, config, reactCompiler);
+  assert.match(compiled, /T0 = Flex;/);
+  assert.match(compiled, /T0 = Panel;/);
+  assert.match(compiled, /T0 = form\.AppForm;/);
+});
