@@ -1594,14 +1594,12 @@ pub fn process_transform(
         }
     };
 
-    // Try to get the actual filename from the metadata context
-    let filename = if let Some(filename_str) =
-        metadata.get_context(&TransformPluginMetadataContextKind::Filename)
-    {
-        FileName::Custom(filename_str)
-    } else {
-        FileName::Custom("unknown".to_string())
-    };
+    // Code without a file gets no filename from @swc/core and an empty one from
+    // Rspack. Either way there's no source file or path to report.
+    let filename = metadata
+        .get_context(&TransformPluginMetadataContextKind::Filename)
+        .filter(|filename| !filename.is_empty())
+        .map_or(FileName::Anon, FileName::Custom);
 
     let mut visitor = ReactComponentAnnotateVisitor::new(config, &filename);
     program.visit_mut_with(&mut visitor);

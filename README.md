@@ -8,7 +8,7 @@ This plugin transforms React components by adding data attributes that help with
 
 - `data-component`: The component name (added to root elements)
 - `data-element`: The name of a rendered component, like `Button` (left off tags like `div`)
-- `data-source-file`: The source filename
+- `data-source-file`: The source filename (left off when the host passes none)
 
 ## Features
 

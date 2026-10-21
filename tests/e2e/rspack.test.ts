@@ -5,17 +5,14 @@ import path from "node:path";
 import {test, type TestContext} from "node:test";
 
 import {
+  experiments,
   rspack,
   type Compiler,
   type Configuration,
   type Stats,
 } from "@rspack/core";
 
-import type {PluginConfig} from "./helpers.ts";
-
-const pluginPath = path.resolve(
-  "target/wasm32-unknown-unknown/release/swc_plugin_component_annotate.wasm"
-);
+import {pluginPath, type PluginConfig} from "./helpers.ts";
 
 function runCompiler(compiler: Compiler): Promise<Stats> {
   return new Promise((resolve, reject) => {
@@ -97,6 +94,19 @@ test("runs through Rspack's built-in SWC loader", async t => {
   const bundle = await readFile(bundlePath, "utf8");
   assert.match(bundle, /"data-component": "Button"/);
   assert.match(bundle, /"data-source-file": "Button\.jsx"/);
+});
+
+test("leaves out source attributes when Rspack's SWC has no filename", () => {
+  // Rspack passes an empty filename rather than none
+  const {code} = experiments.swc.transformSync(`function Button() { return <button />; }`, {
+    jsc: {
+      parser: {syntax: "ecmascript", jsx: true},
+      experimental: {plugins: [[pluginPath, {}]]},
+    },
+  });
+
+  assert.match(code, /"data-component": "Button"/);
+  assert.doesNotMatch(code, /data-source-file/);
 });
 
 test("fails the Rspack build on an invalid config", async t => {

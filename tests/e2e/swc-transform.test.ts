@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import {test} from "node:test";
 
-import {sentryConfig, transform, typescript} from "./helpers.ts";
+import {transformSync} from "@swc/core";
+
+import {pluginPath, sentryConfig, transform, typescript} from "./helpers.ts";
 
 test("annotates React components through @swc/core", () => {
   const code = transform(`
@@ -28,6 +30,21 @@ test("passes plugin config through the SWC wasm boundary", () => {
   assert.match(code, /"data-sentry-component": "Button"/);
   assert.match(code, /"data-sentry-element": "Icon"/);
   assert.match(code, /"data-sentry-source-file": "Button\.jsx"/);
+});
+
+test("leaves out source attributes when there's no filename", () => {
+  const {code} = transformSync(`function Button() { return <div><Icon /></div>; }`, {
+    jsc: {
+      parser: {syntax: "ecmascript", jsx: true},
+      experimental: {
+        plugins: [[pluginPath, {...sentryConfig, "source-path-attr": "data-sentry-source-path"}]],
+      },
+    },
+  });
+
+  assert.match(code, /"data-sentry-component": "Button"/);
+  assert.match(code, /"data-sentry-element": "Icon"/);
+  assert.doesNotMatch(code, /data-sentry-source-(file|path)/);
 });
 
 test("fails on an invalid config instead of falling back to the defaults", () => {
