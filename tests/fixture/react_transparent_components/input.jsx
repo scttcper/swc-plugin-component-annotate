@@ -106,3 +106,14 @@ function Registrar() {
   register(<Button>Later</Button>);
   return <div />;
 }
+
+function RegisteredItems({items}) {
+  return (
+    <ul>
+      {items.map((item) => {
+        register(<Button>Later</Button>);
+        return <Button key={item.id}>{item.label}</Button>;
+      })}
+    </ul>
+  );
+}

@@ -411,3 +411,25 @@ test("gives transparent callsites in render callbacks their component as owner",
   assert.equal(code.match(/"data-sentry-component": "List-Button"/g)?.length, 2);
   assert.doesNotMatch(code, /"data-sentry-component": "_temp/);
 });
+
+test("only owns what render callbacks return", () => {
+  const code = transform(
+    `
+      function App({items}) {
+        return (
+          <ul>
+            {items.map((item) => {
+              register(<Button id="registered" />);
+              return <Button id="rendered" key={item.id} />;
+            })}
+          </ul>
+        );
+      }
+    `,
+    {...sentryConfig, "transparent-components": ["Button"]},
+    reactCompiler
+  );
+
+  assert.match(code, /id: "rendered",\s+"data-sentry-component": "App-Button"/);
+  assert.doesNotMatch(code, /id: "registered",\s+"data-sentry-component"/);
+});

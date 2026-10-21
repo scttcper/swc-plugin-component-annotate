@@ -78,3 +78,11 @@ function Registrar() {
     register(<Button>Later</Button>);
     return <div data-component="Registrar" data-source-file="test.jsx"/>;
 }
+function RegisteredItems({ items }) {
+    return <ul data-component="RegisteredItems" data-source-file="test.jsx">
+      {items.map((item)=>{
+        register(<Button>Later</Button>);
+        return <Button key={item.id} data-component="RegisteredItems-Button" data-source-file="test.jsx">{item.label}</Button>;
+    })}
+    </ul>;
+}

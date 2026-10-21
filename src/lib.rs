@@ -384,9 +384,12 @@ pub struct ReactComponentAnnotateVisitor {
     source_path_attr_ident: Option<IdentName>,
     /// Track the local identifier name for `styled` from @emotion/styled
     styled_import: Option<Id>,
-    /// Owner that callbacks inherit when they are part of rendered output, like a
-    /// `.map` inside returned JSX. Transparent callsites in them fall back to it.
-    callback_owner_name: Option<Atom>,
+    /// Owner a callback lends to what it returns, captured when the callback is
+    /// entered from rendered output, like a `.map` inside returned JSX.
+    callback_render_owner: Option<Atom>,
+    /// Owner transparent callsites fall back to right now. Only set while visiting
+    /// what a render callback returns, so other JSX in its body stays unowned.
+    active_callback_owner: Option<Atom>,
     /// React Compiler outlines callbacks into module-level `_temp` helpers. Maps each
     /// helper to the component that rendered it, or `None` when more than one did.
     temp_helper_owners: FxHashMap<Atom, Option<Atom>>,
@@ -439,7 +442,8 @@ impl ReactComponentAnnotateVisitor {
             react_compiler_enabled: false,
             styled_import: None,
             react_memo_identifiers: FxHashSet::default(),
-            callback_owner_name: None,
+            callback_render_owner: None,
+            active_callback_owner: None,
             temp_helper_owners: FxHashMap::default(),
         }
     }
@@ -571,7 +575,7 @@ impl ReactComponentAnnotateVisitor {
             .current_component_name
             .as_ref()
             .or(self.fragment_child_component_name.as_ref())
-            .or(self.callback_owner_name.as_ref())?;
+            .or(self.active_callback_owner.as_ref())?;
         let owner_component_name = owner_component_name.as_ref();
         let mut transparent_owner =
             String::with_capacity(owner_component_name.len() + 1 + element_name.len());
@@ -1096,7 +1100,7 @@ impl ReactComponentAnnotateVisitor {
         self.current_component_name
             .as_ref()
             .or(self.fragment_child_component_name.as_ref())
-            .or(self.callback_owner_name.as_ref())
+            .or(self.active_callback_owner.as_ref())
             .filter(|owner| {
                 self.component_annotation_policy(owner.as_ref())
                     == ComponentAnnotationPolicy::Normal
@@ -1109,7 +1113,10 @@ impl ReactComponentAnnotateVisitor {
             return;
         }
 
-        let prev_callback_owner = self.callback_owner_name.take();
+        let prev_callback_owners = (
+            self.callback_render_owner.take(),
+            self.active_callback_owner.take(),
+        );
         let prev_return_component = self.current_return_component_name.replace(component_name);
         let prev_component = self.current_component_name.take();
         let prev_fragment_child_component = self.fragment_child_component_name.take();
@@ -1127,7 +1134,7 @@ impl ReactComponentAnnotateVisitor {
         func.visit_mut_children_with(self);
         self.jsx_bindings.pop();
 
-        self.callback_owner_name = prev_callback_owner;
+        (self.callback_render_owner, self.active_callback_owner) = prev_callback_owners;
         self.current_return_component_name = prev_return_component;
         self.current_component_name = prev_component;
         self.fragment_child_component_name = prev_fragment_child_component;
@@ -1143,7 +1150,10 @@ impl ReactComponentAnnotateVisitor {
             return;
         }
 
-        let prev_callback_owner = self.callback_owner_name.take();
+        let prev_callback_owners = (
+            self.callback_render_owner.take(),
+            self.active_callback_owner.take(),
+        );
         let prev_return_component = self.current_return_component_name.replace(component_name);
         let prev_component = self.current_component_name.take();
         let prev_fragment_child_component = self.fragment_child_component_name.take();
@@ -1170,7 +1180,7 @@ impl ReactComponentAnnotateVisitor {
         }
         self.jsx_bindings.pop();
 
-        self.callback_owner_name = prev_callback_owner;
+        (self.callback_render_owner, self.active_callback_owner) = prev_callback_owners;
         self.current_return_component_name = prev_return_component;
         self.current_component_name = prev_component;
         self.fragment_child_component_name = prev_fragment_child_component;
@@ -1183,7 +1193,7 @@ impl ReactComponentAnnotateVisitor {
 
     fn visit_component_return_expr(&mut self, expr: &mut Expr) {
         let Some(component_name) = self.current_return_component_name.clone() else {
-            expr.visit_mut_with(self);
+            self.visit_callback_return_expr(expr);
             return;
         };
 
@@ -1194,6 +1204,17 @@ impl ReactComponentAnnotateVisitor {
 
         self.current_component_name = prev_component;
         self.fragment_child_component_name = prev_fragment_child_component;
+    }
+
+    /// Visits what a callback returns with the owner its render context lends it.
+    /// Outside render callbacks that owner is `None`, so nothing changes.
+    fn visit_callback_return_expr(&mut self, expr: &mut Expr) {
+        let prev_active_owner = std::mem::replace(
+            &mut self.active_callback_owner,
+            self.callback_render_owner.clone(),
+        );
+        expr.visit_mut_with(self);
+        self.active_callback_owner = prev_active_owner;
     }
 }
 
@@ -1273,9 +1294,9 @@ impl VisitMut for ReactComponentAnnotateVisitor {
                 .get(&component_name)
                 .cloned()
                 .flatten();
-            let prev_callback_owner = std::mem::replace(&mut self.callback_owner_name, owner);
+            let prev_active_owner = std::mem::replace(&mut self.active_callback_owner, owner);
             self.visit_mut_function(&mut func_decl.function);
-            self.callback_owner_name = prev_callback_owner;
+            self.active_callback_owner = prev_active_owner;
         } else if is_component_name(component_name.as_ref()) {
             self.visit_function_as_component(&mut func_decl.function, component_name);
         } else {
@@ -1302,8 +1323,13 @@ impl VisitMut for ReactComponentAnnotateVisitor {
     }
 
     fn visit_mut_function(&mut self, function: &mut Function) {
-        let callback_owner = self.render_owner();
-        let prev_callback_owner = std::mem::replace(&mut self.callback_owner_name, callback_owner);
+        // Only what this callback returns renders for the current owner; its
+        // `return` statements pick the owner up again in `visit_component_return_expr`.
+        let render_owner = self.render_owner();
+        let prev_callback_owners = (
+            std::mem::replace(&mut self.callback_render_owner, render_owner),
+            self.active_callback_owner.take(),
+        );
         let prev_return_component = self.current_return_component_name.take();
         let prev_component = self.current_component_name.take();
         let prev_fragment_child_component = self.fragment_child_component_name.take();
@@ -1314,7 +1340,7 @@ impl VisitMut for ReactComponentAnnotateVisitor {
         function.visit_mut_children_with(self);
         self.jsx_bindings.pop();
 
-        self.callback_owner_name = prev_callback_owner;
+        (self.callback_render_owner, self.active_callback_owner) = prev_callback_owners;
         self.current_return_component_name = prev_return_component;
         self.current_component_name = prev_component;
         self.fragment_child_component_name = prev_fragment_child_component;
@@ -1393,8 +1419,11 @@ impl VisitMut for ReactComponentAnnotateVisitor {
     }
 
     fn visit_mut_arrow_expr(&mut self, arrow_expr: &mut ArrowExpr) {
-        let callback_owner = self.render_owner();
-        let prev_callback_owner = std::mem::replace(&mut self.callback_owner_name, callback_owner);
+        let render_owner = self.render_owner();
+        let prev_callback_owners = (
+            std::mem::replace(&mut self.callback_render_owner, render_owner),
+            self.active_callback_owner.take(),
+        );
         let prev_return_component = self.current_return_component_name.take();
         let prev_component = self.current_component_name.take();
         let prev_fragment_child_component = self.fragment_child_component_name.take();
@@ -1402,10 +1431,15 @@ impl VisitMut for ReactComponentAnnotateVisitor {
 
         self.jsx_bindings
             .push_function_with(collect_pat_list_scope(&arrow_expr.params));
-        arrow_expr.visit_mut_children_with(self);
+        arrow_expr.params.visit_mut_with(self);
+        match arrow_expr.body.as_mut() {
+            // A concise body is the callback's return value
+            ArrowFunctionBody::Expr(expr) => self.visit_callback_return_expr(expr),
+            body => body.visit_mut_with(self),
+        }
         self.jsx_bindings.pop();
 
-        self.callback_owner_name = prev_callback_owner;
+        (self.callback_render_owner, self.active_callback_owner) = prev_callback_owners;
         self.current_return_component_name = prev_return_component;
         self.current_component_name = prev_component;
         self.fragment_child_component_name = prev_fragment_child_component;
