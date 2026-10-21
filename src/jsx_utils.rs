@@ -19,6 +19,29 @@ pub fn get_element_name(element: &JSXElementName) -> Option<Cow<'_, str>> {
     }
 }
 
+/// Element names that say nothing about what rendered: polymorphic `<Component>`
+/// tags and members of local values like `<field.Switch>`, which the React
+/// Compiler can also rename (`field_5.Switch`).
+pub fn is_noise_element_name(element: &JSXElementName) -> bool {
+    match element {
+        JSXElementName::Ident(ident) => &*ident.sym == "Component",
+        JSXElementName::JSXMemberExpr(member_expr) => {
+            let mut obj = &member_expr.obj;
+            loop {
+                match obj {
+                    JSXObject::Ident(ident) => {
+                        break ident.sym.starts_with(|c: char| c.is_ascii_lowercase());
+                    }
+                    JSXObject::JSXMemberExpr(nested_member) => obj = &nested_member.obj,
+                    #[cfg(swc_ast_unknown)]
+                    _ => break false,
+                }
+            }
+        }
+        _ => false,
+    }
+}
+
 /// Recursively build the name for member expressions (e.g., "Components.UI.Button")
 fn get_member_expression_name(member_expr: &JSXMemberExpr) -> Option<String> {
     fn member_expression_name_len(member_expr: &JSXMemberExpr) -> Option<usize> {

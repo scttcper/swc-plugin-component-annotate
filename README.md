@@ -197,6 +197,13 @@ Whether to include components such as `Button`, `Link`, `Checkbox`, or `MenuItem
 
 Use `ignored-components` only when a component should not participate in annotation at all. Ignored components get no generated attributes. Use `transparent-components` when a component should still receive useful owner metadata, but should not report itself as `data-sentry-element`.
 
+#### Names that are left out
+
+Names that wouldn't tell you what rendered are dropped rather than replaced, so the nearest real component gets reported instead:
+
+- Only PascalCase functions count as components. Helpers that return JSX, like `renderRow` or `getIcon`, don't add `data-sentry-component`.
+- Polymorphic `<Component>` tags and members of local values, like `<field.Switch>`, don't get `data-sentry-element`. Members of component namespaces, like `<Fields.Switch>`, keep theirs.
+
 ## Examples
 
 ### Input

@@ -488,6 +488,7 @@ impl ReactComponentAnnotateVisitor {
         element_policy: ComponentAnnotationPolicy,
         existing_attrs: &AttributePresence,
         transparent_owner_component_name: Option<&Atom>,
+        report_element: bool,
     ) -> Option<ElementAttrs> {
         if let Some(ref component_name) = self.current_component_name {
             if self.should_skip_component_return(component_name) {
@@ -499,7 +500,8 @@ impl ReactComponentAnnotateVisitor {
             return None;
         }
 
-        let can_annotate_element = !self.should_ignore_element(element_name)
+        let can_annotate_element = report_element
+            && !self.should_ignore_element(element_name)
             && element_policy == ComponentAnnotationPolicy::Normal;
         let owner_component_name = if element_policy == ComponentAnnotationPolicy::Transparent {
             transparent_owner_component_name
@@ -804,7 +806,9 @@ impl ReactComponentAnnotateVisitor {
             && var_declarator.init.is_some()
             && self.return_root_definitions.next_is_root();
         let component_name = match &var_declarator.name {
-            Pat::Ident(ident) => Some(ident.id.sym.clone()),
+            Pat::Ident(ident) if is_component_name(ident.id.sym.as_ref()) => {
+                Some(ident.id.sym.clone())
+            }
             _ => None,
         };
 
@@ -1065,6 +1069,7 @@ impl ReactComponentAnnotateVisitor {
             element_policy,
             &existing_attrs,
             transparent_owner_component_name.as_ref(),
+            !is_noise_element_name(&opening_element.name),
         ) else {
             return;
         };
@@ -1271,8 +1276,10 @@ impl VisitMut for ReactComponentAnnotateVisitor {
             let prev_callback_owner = std::mem::replace(&mut self.callback_owner_name, owner);
             self.visit_mut_function(&mut func_decl.function);
             self.callback_owner_name = prev_callback_owner;
-        } else {
+        } else if is_component_name(component_name.as_ref()) {
             self.visit_function_as_component(&mut func_decl.function, component_name);
+        } else {
+            self.visit_mut_function(&mut func_decl.function);
         }
     }
 
@@ -1435,6 +1442,13 @@ impl VisitMut for ReactComponentAnnotateVisitor {
     fn visit_mut_jsx_fragment(&mut self, jsx_fragment: &mut JSXFragment) {
         self.process_jsx_fragment(jsx_fragment);
     }
+}
+
+/// React components are PascalCase. Lowercase functions that return JSX, like
+/// `renderRow` or `getIcon`, are helpers whose names would only be DOM noise.
+#[inline]
+fn is_component_name(name: &str) -> bool {
+    name.starts_with(|c: char| c.is_ascii_uppercase())
 }
 
 /// Matches the module-scope helper names the React Compiler generates when it
