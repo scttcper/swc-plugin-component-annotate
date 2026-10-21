@@ -6,19 +6,19 @@ mod styled;
 
 use config::PluginConfig;
 use jsx_scope::{
-    collect_function_param_scope, collect_pat_identifiers_with_status, collect_pat_list_scope,
-    JsxBindingTracker, JsxIdentifierStatus,
+    JsxBindingTracker, JsxIdentifierStatus, collect_function_param_scope,
+    collect_pat_identifiers_with_status, collect_pat_list_scope,
 };
 use jsx_utils::*;
 use path_utils::{extract_absolute_path, extract_filename};
 use rustc_hash::{FxHashMap, FxHashSet};
-use styled::{styled_call_component_ref, transform_styled_call, StyledTransformAttrs};
+use styled::{StyledTransformAttrs, styled_call_component_ref, transform_styled_call};
 use swc_core::{
-    common::{errors::HANDLER, FileName, DUMMY_SP},
+    common::{DUMMY_SP, FileName, errors::HANDLER},
     ecma::{
         ast::*,
         atoms::Atom,
-        visit::{noop_visit_mut_type, noop_visit_type, Visit, VisitMut, VisitMutWith, VisitWith},
+        visit::{Visit, VisitMut, VisitMutWith, VisitWith, noop_visit_mut_type, noop_visit_type},
     },
     plugin::{
         metadata::TransformPluginMetadataContextKind, plugin_transform,
@@ -538,10 +538,10 @@ impl ReactComponentAnnotateVisitor {
         transparent_owner_component_name: Option<&Atom>,
         report_element: bool,
     ) -> Option<ElementAttrs> {
-        if let Some(ref component_name) = self.current_component_name {
-            if self.should_skip_component_return(component_name) {
-                return None;
-            }
+        if let Some(ref component_name) = self.current_component_name
+            && self.should_skip_component_return(component_name)
+        {
+            return None;
         }
 
         if element_policy == ComponentAnnotationPolicy::Ignored {
@@ -570,33 +570,34 @@ impl ReactComponentAnnotateVisitor {
             ));
         }
 
-        if !existing_attrs.component {
-            if let Some(component_name) = owner_component_name {
-                attrs.push(create_jsx_attr_with_ident(
-                    &self.component_attr_ident,
-                    component_name.as_ref(),
-                ));
-            }
+        if !existing_attrs.component
+            && let Some(component_name) = owner_component_name
+        {
+            attrs.push(create_jsx_attr_with_ident(
+                &self.component_attr_ident,
+                component_name.as_ref(),
+            ));
         }
 
-        if !existing_attrs.source_file && (has_owner_component || can_annotate_element) {
-            if let Some(ref source_file) = self.source_file_name {
-                attrs.push(create_jsx_attr_with_ident_and_str(
-                    &self.source_file_attr_ident,
-                    source_file,
-                ));
-            }
+        if !existing_attrs.source_file
+            && (has_owner_component || can_annotate_element)
+            && let Some(ref source_file) = self.source_file_name
+        {
+            attrs.push(create_jsx_attr_with_ident_and_str(
+                &self.source_file_attr_ident,
+                source_file,
+            ));
         }
 
-        if !existing_attrs.source_path && (has_owner_component || can_annotate_element) {
-            if let (Some(ref source_path), Some(ref source_path_attr_ident)) =
+        if !existing_attrs.source_path
+            && (has_owner_component || can_annotate_element)
+            && let (Some(source_path), Some(source_path_attr_ident)) =
                 (&self.source_file_path, &self.source_path_attr_ident)
-            {
-                attrs.push(create_jsx_attr_with_ident_and_str(
-                    source_path_attr_ident,
-                    source_path,
-                ));
-            }
+        {
+            attrs.push(create_jsx_attr_with_ident_and_str(
+                source_path_attr_ident,
+                source_path,
+            ));
         }
 
         if attrs.is_empty() {
@@ -882,36 +883,32 @@ impl ReactComponentAnnotateVisitor {
             let init = unwrap_component_expr(init);
             match init {
                 Expr::Call(call_expr) => {
-                    if let Some(component_name) = component_name.clone() {
-                        if self.visit_react_memo_component(call_expr, component_name) {
-                            return;
-                        }
+                    if let Some(component_name) = component_name.clone()
+                        && self.visit_react_memo_component(call_expr, component_name)
+                    {
+                        return;
                     }
 
-                    if self.config.experimental_rewrite_emotion_styled {
-                        if let (Some(component_name), Some(ref_component_name)) = (
+                    if self.config.experimental_rewrite_emotion_styled
+                        && let (Some(component_name), Some(ref_component_name)) = (
                             component_name.as_ref(),
                             styled_call_component_ref(call_expr, self.styled_import.as_ref()),
-                        ) {
-                            if self.component_annotation_policy(component_name.as_ref())
-                                == ComponentAnnotationPolicy::Normal
-                            {
-                                transform_styled_call(
-                                    call_expr,
-                                    ref_component_name,
-                                    component_name.clone(),
-                                    StyledTransformAttrs {
-                                        element_attr_name: self.config.element_attr_name(),
-                                        source_file: self.source_file_name.as_ref(),
-                                        source_file_attr_ident: &self.source_file_attr_ident,
-                                        source_path: self.source_file_path.as_ref(),
-                                        source_path_attr_ident: self
-                                            .source_path_attr_ident
-                                            .as_ref(),
-                                    },
-                                );
-                            }
-                        }
+                        )
+                        && self.component_annotation_policy(component_name.as_ref())
+                            == ComponentAnnotationPolicy::Normal
+                    {
+                        transform_styled_call(
+                            call_expr,
+                            ref_component_name,
+                            component_name.clone(),
+                            StyledTransformAttrs {
+                                element_attr_name: self.config.element_attr_name(),
+                                source_file: self.source_file_name.as_ref(),
+                                source_file_attr_ident: &self.source_file_attr_ident,
+                                source_path: self.source_file_path.as_ref(),
+                                source_path_attr_ident: self.source_path_attr_ident.as_ref(),
+                            },
+                        );
                     }
                     init.visit_mut_with(self);
                 }
@@ -1327,10 +1324,10 @@ impl VisitMut for ReactComponentAnnotateVisitor {
                             Some(_) => None,
                         };
 
-                        if let Some(imported_name) = imported_name {
-                            if imported_name == "default" || imported_name == "styled" {
-                                self.styled_import = Some(named_import.local.to_id());
-                            }
+                        if let Some(imported_name) = imported_name
+                            && (imported_name == "default" || imported_name == "styled")
+                        {
+                            self.styled_import = Some(named_import.local.to_id());
                         }
                     }
                     ImportSpecifier::Namespace(_) => {}
@@ -1577,9 +1574,9 @@ pub fn process_transform(
 ) -> Program {
     let config = match metadata
         .get_transform_plugin_config()
-        .map_or(Ok(PluginConfig::default()), |config| {
-            PluginConfig::from_json(&config)
-        }) {
+        .as_deref()
+        .map_or(Ok(PluginConfig::default()), PluginConfig::from_json)
+    {
         Ok(config) => config,
         Err(error) => {
             // Falling back to the defaults would silently change every attribute

@@ -1,7 +1,7 @@
 use std::time::{Duration, Instant};
 
 use swc_core::{
-    common::{FileName, Mark, SourceMap, GLOBALS},
+    common::{FileName, GLOBALS, Mark, SourceMap},
     ecma::{
         ast::Pass,
         ast::Program,
@@ -10,7 +10,7 @@ use swc_core::{
         visit::visit_mut_pass,
     },
 };
-use swc_plugin_component_annotate::{config::PluginConfig, ReactComponentAnnotateVisitor};
+use swc_plugin_component_annotate::{ReactComponentAnnotateVisitor, config::PluginConfig};
 
 const WARMUP_ITERS: usize = 3;
 const MEASURE_ITERS: usize = 10;

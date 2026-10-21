@@ -22,10 +22,10 @@ pub(crate) fn styled_call_component_ref(
         return None;
     }
 
-    if let Some(ExprOrSpread { spread: None, expr }) = call_expr.args.first() {
-        if let Expr::Ident(ident) = expr.as_ref() {
-            return Some(ident.sym.clone());
-        }
+    if let Some(ExprOrSpread { spread: None, expr }) = call_expr.args.first()
+        && let Expr::Ident(ident) = expr.as_ref()
+    {
+        return Some(ident.sym.clone());
     }
 
     None
