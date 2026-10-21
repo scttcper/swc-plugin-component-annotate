@@ -175,8 +175,45 @@ fn collect_value_sources(value: &Expr, sources: &mut Vec<Id>) -> bool {
             .exprs
             .last()
             .is_some_and(|value| collect_value_sources(value, sources)),
+        // Calls, objects and arrays pass nested JSX into what the component renders,
+        // e.g. `tct('[link]', {link: <Link />})` or `createPortal(<div />, el)`.
+        // Callees and member objects stay out so `$[0]` cache reads aren't origins.
+        Expr::Call(call) => collect_args_sources(&call.args, sources),
+        Expr::New(new) => new
+            .args
+            .as_deref()
+            .is_some_and(|args| collect_args_sources(args, sources)),
+        Expr::Array(array) => array
+            .elems
+            .iter()
+            .flatten()
+            .fold(false, |contains_jsx, elem| {
+                collect_value_sources(&elem.expr, sources) | contains_jsx
+            }),
+        Expr::Object(object) => object.props.iter().fold(false, |contains_jsx, prop| {
+            let value_contains_jsx = match prop {
+                PropOrSpread::Spread(spread) => collect_value_sources(&spread.expr, sources),
+                PropOrSpread::Prop(prop) => match prop.as_ref() {
+                    Prop::KeyValue(key_value) => collect_value_sources(&key_value.value, sources),
+                    Prop::Shorthand(ident) => {
+                        sources.push(ident.to_id());
+                        false
+                    }
+                    _ => false,
+                },
+                #[cfg(swc_ast_unknown)]
+                _ => false,
+            };
+            value_contains_jsx | contains_jsx
+        }),
         _ => false,
     }
+}
+
+fn collect_args_sources(args: &[ExprOrSpread], sources: &mut Vec<Id>) -> bool {
+    args.iter().fold(false, |contains_jsx, arg| {
+        collect_value_sources(&arg.expr, sources) | contains_jsx
+    })
 }
 
 fn collect_jsx_child_sources(children: &[JSXElementChild], sources: &mut Vec<Id>) {
