@@ -1,5 +1,4 @@
 pub mod config;
-mod constants;
 mod jsx_scope;
 mod jsx_utils;
 pub mod path_utils;
@@ -49,22 +48,38 @@ struct ElementAttrs {
 
 type DefinitionId = usize;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DefinitionRole {
+    /// JSX the component returns
+    ReturnRoot,
+    /// JSX an `<svg>` renders, which gets no attributes
+    SvgContent,
+    Other,
+}
+
 #[derive(Default)]
 struct ReturnRootDefinitions {
     roots: FxHashSet<DefinitionId>,
+    svg_contents: FxHashSet<DefinitionId>,
     definition_count: usize,
     next_definition: DefinitionId,
 }
 
 impl ReturnRootDefinitions {
-    fn next_is_root(&mut self) -> bool {
+    fn next_role(&mut self) -> DefinitionRole {
         if self.next_definition >= self.definition_count {
-            return false;
+            return DefinitionRole::Other;
         }
 
         let definition = self.next_definition;
         self.next_definition += 1;
-        self.roots.contains(&definition)
+        if self.roots.contains(&definition) {
+            DefinitionRole::ReturnRoot
+        } else if self.svg_contents.contains(&definition) {
+            DefinitionRole::SvgContent
+        } else {
+            DefinitionRole::Other
+        }
     }
 }
 
@@ -82,6 +97,8 @@ struct ReturnRootDefinitionCollector {
     definitions: Vec<Definition>,
     definitions_by_binding: FxHashMap<Id, Vec<DefinitionId>>,
     returned_values: Vec<(Id, DefinitionId)>,
+    /// Bindings an `<svg>` renders, like `t0` in `<svg>{t0}</svg>`
+    svg_values: Vec<(Id, DefinitionId)>,
 }
 
 impl ReturnRootDefinitionCollector {
@@ -107,7 +124,7 @@ impl ReturnRootDefinitionCollector {
             .extend(sources.into_iter().map(|source| (source, before)));
     }
 
-    fn resolve(&self, binding: &Id, before: DefinitionId, roots: &mut FxHashSet<DefinitionId>) {
+    fn resolve(&self, binding: &Id, before: DefinitionId, resolved: &mut FxHashSet<DefinitionId>) {
         let Some(definition) = self
             .definitions_by_binding
             .get(binding)
@@ -122,11 +139,11 @@ impl ReturnRootDefinitionCollector {
             return;
         };
 
-        if !roots.insert(definition) {
+        if !resolved.insert(definition) {
             return;
         }
         for source in &self.definitions[definition].sources {
-            self.resolve(source, definition, roots);
+            self.resolve(source, definition, resolved);
         }
     }
 
@@ -136,8 +153,17 @@ impl ReturnRootDefinitionCollector {
             self.resolve(binding, *before, &mut roots);
         }
 
+        // The compiler hoists `<svg>` children into definitions ahead of it
+        let mut svg_contents = FxHashSet::default();
+        for (binding, before) in &self.svg_values {
+            self.resolve(binding, *before, &mut svg_contents);
+        }
+        // JSX the component also returns outside an `<svg>` stays annotated
+        svg_contents.retain(|definition| !roots.contains(definition));
+
         ReturnRootDefinitions {
             roots,
+            svg_contents,
             definition_count: self.definitions.len(),
             next_definition: 0,
         }
@@ -151,7 +177,7 @@ fn collect_value_sources(value: &Expr, sources: &mut Vec<Id>) -> bool {
             false
         }
         Expr::JSXElement(element) => {
-            collect_jsx_child_sources(&element.children, sources);
+            collect_jsx_element_sources(element, sources);
             true
         }
         Expr::JSXFragment(fragment) => {
@@ -241,6 +267,13 @@ fn contains_jsx(expr: &Expr) -> bool {
     finder.found
 }
 
+fn collect_jsx_element_sources(element: &JSXElement, sources: &mut Vec<Id>) {
+    // Nothing inside an <svg> is annotated, so JSX it renders isn't a root
+    if !is_svg_element_name(&element.opening.name) {
+        collect_jsx_child_sources(&element.children, sources);
+    }
+}
+
 fn collect_jsx_child_sources(children: &[JSXElementChild], sources: &mut Vec<Id>) {
     for child in children {
         match child {
@@ -253,7 +286,7 @@ fn collect_jsx_child_sources(children: &[JSXElementChild], sources: &mut Vec<Id>
                 collect_value_sources(&spread.expr, sources);
             }
             JSXElementChild::JSXElement(element) => {
-                collect_jsx_child_sources(&element.children, sources);
+                collect_jsx_element_sources(element, sources);
             }
             JSXElementChild::JSXFragment(fragment) => {
                 collect_jsx_child_sources(&fragment.children, sources);
@@ -271,6 +304,17 @@ impl Visit for ReturnRootDefinitionCollector {
     fn visit_arrow_expr(&mut self, _: &ArrowExpr) {}
 
     fn visit_function(&mut self, _: &Function) {}
+
+    fn visit_jsx_element(&mut self, element: &JSXElement) {
+        if is_svg_element_name(&element.opening.name) {
+            let before = self.definitions.len();
+            let mut sources = Vec::new();
+            collect_jsx_child_sources(&element.children, &mut sources);
+            self.svg_values
+                .extend(sources.into_iter().map(|source| (source, before)));
+        }
+        element.visit_children_with(self);
+    }
 
     fn visit_assign_expr(&mut self, assign_expr: &AssignExpr) {
         let definition = matches!(
@@ -371,7 +415,6 @@ pub struct ReactComponentAnnotateVisitor {
     current_return_component_name: Option<Atom>,
     return_root_definitions: ReturnRootDefinitions,
     react_compiler_enabled: bool,
-    ignored_elements: &'static FxHashSet<&'static str>,
     ignored_components_set: FxHashSet<String>,
     transparent_components_set: FxHashSet<String>,
     jsx_bindings: JsxBindingTracker,
@@ -393,6 +436,11 @@ pub struct ReactComponentAnnotateVisitor {
     /// React Compiler outlines callbacks into module-level `_temp` helpers. Maps each
     /// helper to the component that rendered it, or `None` when more than one did.
     temp_helper_owners: FxHashMap<Atom, Option<Atom>>,
+    /// Set while visiting what an `<svg>` renders. Paths, groups and anything else
+    /// in there get no attributes.
+    in_svg: bool,
+    /// `_temp` helpers an `<svg>` renders, which get no attributes either
+    svg_temp_helpers: FxHashSet<Atom>,
 }
 
 impl ReactComponentAnnotateVisitor {
@@ -425,7 +473,6 @@ impl ReactComponentAnnotateVisitor {
             component_attr_ident,
             config,
             element_attr_ident,
-            ignored_elements: constants::default_ignored_elements(),
             ignored_components_set,
             transparent_components_set,
             jsx_bindings: JsxBindingTracker::new(),
@@ -445,6 +492,8 @@ impl ReactComponentAnnotateVisitor {
             callback_render_owner: None,
             active_callback_owner: None,
             temp_helper_owners: FxHashMap::default(),
+            in_svg: false,
+            svg_temp_helpers: FxHashSet::default(),
         }
     }
 
@@ -481,11 +530,6 @@ impl ReactComponentAnnotateVisitor {
         self.component_annotation_policy(component_name) == ComponentAnnotationPolicy::Transparent
     }
 
-    #[inline]
-    fn should_ignore_element(&self, element_name: &str) -> bool {
-        self.ignored_elements.contains(element_name)
-    }
-
     fn element_attrs(
         &self,
         element_name: &str,
@@ -504,9 +548,8 @@ impl ReactComponentAnnotateVisitor {
             return None;
         }
 
-        let can_annotate_element = report_element
-            && !self.should_ignore_element(element_name)
-            && element_policy == ComponentAnnotationPolicy::Normal;
+        let can_annotate_element =
+            report_element && element_policy == ComponentAnnotationPolicy::Normal;
         let owner_component_name = if element_policy == ComponentAnnotationPolicy::Transparent {
             transparent_owner_component_name
         } else {
@@ -806,9 +849,13 @@ impl ReactComponentAnnotateVisitor {
     }
 
     fn visit_var_declarator(&mut self, var_declarator: &mut VarDeclarator) {
-        let is_return_root_definition = matches!(&var_declarator.name, Pat::Ident(_))
-            && var_declarator.init.is_some()
-            && self.return_root_definitions.next_is_root();
+        let is_definition =
+            matches!(&var_declarator.name, Pat::Ident(_)) && var_declarator.init.is_some();
+        let role = if is_definition {
+            self.return_root_definitions.next_role()
+        } else {
+            DefinitionRole::Other
+        };
         let component_name = match &var_declarator.name {
             Pat::Ident(ident) if is_component_name(ident.id.sym.as_ref()) => {
                 Some(ident.id.sym.clone())
@@ -818,9 +865,9 @@ impl ReactComponentAnnotateVisitor {
 
         var_declarator.name.visit_mut_with(self);
 
-        if is_return_root_definition {
+        if role != DefinitionRole::Other {
             if let Some(init) = &mut var_declarator.init {
-                self.visit_component_return_expr(init);
+                self.visit_compiled_definition(init, role);
             }
             return;
         }
@@ -1000,15 +1047,19 @@ impl ReactComponentAnnotateVisitor {
         // Check if this is a named fragment (Fragment, React.Fragment, or aliases)
         let is_fragment = self.is_react_fragment_element_name(&element.opening.name);
 
-        if !is_fragment {
-            self.add_attributes_to_element(&mut element.opening);
-        }
-
         if is_fragment {
             self.visit_fragment_jsx_children(element);
-        } else {
-            self.visit_element_jsx_children(element);
+            return;
         }
+
+        self.add_attributes_to_element(&mut element.opening);
+
+        // The <svg> itself is annotated, nothing inside it is. Its children are still
+        // walked so `_temp` helpers it renders are skipped too.
+        let prev_in_svg = self.in_svg;
+        self.in_svg |= is_svg_element_name(&element.opening.name);
+        self.visit_element_jsx_children(element);
+        self.in_svg = prev_in_svg;
     }
 
     fn process_jsx_fragment(&mut self, fragment: &mut JSXFragment) {
@@ -1046,7 +1097,7 @@ impl ReactComponentAnnotateVisitor {
     }
 
     fn add_attributes_to_element(&self, opening_element: &mut JSXOpeningElement) {
-        if self.is_unannotatable_jsx_element_name(&opening_element.name) {
+        if self.in_svg || self.is_unannotatable_jsx_element_name(&opening_element.name) {
             return;
         }
 
@@ -1206,6 +1257,19 @@ impl ReactComponentAnnotateVisitor {
         self.fragment_child_component_name = prev_fragment_child_component;
     }
 
+    /// Visits a compiled definition of JSX the component returns or an `<svg>` renders
+    fn visit_compiled_definition(&mut self, value: &mut Expr, role: DefinitionRole) {
+        match role {
+            DefinitionRole::ReturnRoot => self.visit_component_return_expr(value),
+            DefinitionRole::SvgContent => {
+                let prev_in_svg = std::mem::replace(&mut self.in_svg, true);
+                value.visit_mut_with(self);
+                self.in_svg = prev_in_svg;
+            }
+            DefinitionRole::Other => value.visit_mut_with(self),
+        }
+    }
+
     /// Visits what a callback returns with the owner its render context lends it.
     /// Outside render callbacks that owner is `None`, so nothing changes.
     fn visit_callback_return_expr(&mut self, expr: &mut Expr) {
@@ -1295,8 +1359,13 @@ impl VisitMut for ReactComponentAnnotateVisitor {
                 .cloned()
                 .flatten();
             let prev_active_owner = std::mem::replace(&mut self.active_callback_owner, owner);
+            let prev_in_svg = std::mem::replace(
+                &mut self.in_svg,
+                self.svg_temp_helpers.contains(&component_name),
+            );
             self.visit_mut_function(&mut func_decl.function);
             self.active_callback_owner = prev_active_owner;
+            self.in_svg = prev_in_svg;
         } else if is_component_name(component_name.as_ref()) {
             self.visit_function_as_component(&mut func_decl.function, component_name);
         } else {
@@ -1306,6 +1375,10 @@ impl VisitMut for ReactComponentAnnotateVisitor {
 
     fn visit_mut_ident(&mut self, ident: &mut Ident) {
         if !self.react_compiler_enabled || !is_react_compiler_temp(ident.sym.as_ref()) {
+            return;
+        }
+        if self.in_svg {
+            self.svg_temp_helpers.insert(ident.sym.clone());
             return;
         }
         let Some(owner) = self.render_owner() else {
@@ -1449,17 +1522,21 @@ impl VisitMut for ReactComponentAnnotateVisitor {
     fn visit_mut_assign_expr(&mut self, assign_expr: &mut AssignExpr) {
         self.mark_fragment_assignment(assign_expr);
 
-        let is_return_root_assignment = assign_expr.op == AssignOp::Assign
+        let is_definition = assign_expr.op == AssignOp::Assign
             && matches!(
                 &assign_expr.left,
                 AssignTarget::Simple(SimpleAssignTarget::Ident(_))
-            )
-            && self.return_root_definitions.next_is_root();
-
-        if is_return_root_assignment {
-            self.visit_component_return_expr(&mut assign_expr.right);
+            );
+        let role = if is_definition {
+            self.return_root_definitions.next_role()
         } else {
+            DefinitionRole::Other
+        };
+
+        if role == DefinitionRole::Other {
             assign_expr.visit_mut_children_with(self);
+        } else {
+            self.visit_compiled_definition(&mut assign_expr.right, role);
         }
     }
 

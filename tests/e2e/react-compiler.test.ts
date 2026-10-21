@@ -433,3 +433,33 @@ test("only owns what render callbacks return", () => {
   assert.match(code, /id: "rendered",\s+"data-sentry-component": "App-Button"/);
   assert.doesNotMatch(code, /id: "registered",\s+"data-sentry-component"/);
 });
+
+test("skips JSX the compiler hoists out of an svg", () => {
+  const code = transform(
+    `
+      function Icon(props) {
+        return (
+          <svg viewBox="0 0 16 16" {...props}>
+            <g><path d="M0 0L16 16" /></g>
+            <Mark />
+          </svg>
+        );
+      }
+
+      function Chart({points}) {
+        return <svg>{points.map((point) => <Dot key={point} />)}</svg>;
+      }
+    `,
+    sentryConfig,
+    reactCompiler
+  );
+
+  // The svg children are cached ahead of it and the callback becomes a `_temp`
+  // helper, so none of them are inside the svg by the time the plugin runs
+  assert.match(code, /t\d+ = \/\*#__PURE__\*\/ _jsx\(Mark, \{\}\)/);
+  assert.match(code, /function _temp\(point\) \{\s+return \/\*#__PURE__\*\/ _jsx\(Dot, \{\}, point\)/);
+  assert.equal(code.match(/"data-sentry-source-file"/g)?.length, 2);
+  assert.match(code, /"data-sentry-component": "Icon"/);
+  assert.match(code, /"data-sentry-component": "Chart"/);
+  assert.doesNotMatch(code, /"data-sentry-element"/);
+});
