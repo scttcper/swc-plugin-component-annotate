@@ -26,11 +26,14 @@ This plugin transforms React components by adding data attributes that help with
 npm install --save-dev swc-plugin-component-annotate
 ```
 
-### Rspack compatibility
+### Compatibility
 
 Version 1.18.x is compiled against `swc_core` 77.0.0 and tested with
-`@rspack/core` 2.2.0. SWC plugins use a versioned wasm ABI, so use a plugin
-release built for the `swc_core` version embedded in your Rspack release.
+`@swc/core` 1.16.1 through 1.16.18 and `@rspack/core` 2.2.0 through
+2.3.0-beta.0. The wasm ABI comes from `swc_ecma_ast` 29 and `swc_common` 26,
+which every `swc_core` release from 77.0.0 through 82.1.1 shares. You only
+need a newer plugin release once your host moves to a new major of either
+crate.
 
 ## Usage
 

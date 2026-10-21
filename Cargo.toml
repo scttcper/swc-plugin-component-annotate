@@ -17,8 +17,8 @@ crate-type = ["cdylib", "lib"]
 [dependencies]
 rustc-hash = "2.1.3"
 serde = { version = "1.0.229", features = ["derive"], default-features = false }
-serde_json = { version = "1.0.151", default-features = false }
-# Pinned to the swc_core ABI embedded in @rspack/core 2.2.0.
+serde_json = { version = "1.0.154", default-features = false }
+# Lowest swc_core on the swc_ecma_ast 29 / swc_common 26 plugin ABI.
 swc_core = { version = "=77.0.0", features = ["ecma_plugin_transform"] }
 
 
@@ -29,8 +29,8 @@ swc_core = { version = "=77.0.0", features = ["ecma_plugin_transform", "ecma_par
 [profile.release]
 codegen-units = 1
 lto = true
-# Optimize for size
-opt-level = "z"
+# Optimize for transform speed over wasm size
+opt-level = 3
 # Strip debug symbols
 strip = "symbols"
 
