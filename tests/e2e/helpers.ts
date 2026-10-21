@@ -13,8 +13,9 @@ export function transform(
   pluginConfig: PluginConfig = {},
   swcOptions: Pick<Options, "isModule" | "jsc"> = {}
 ): string {
+  const parser = swcOptions.jsc?.parser ?? {syntax: "ecmascript", jsx: true};
   const jsc: NonNullable<Options["jsc"]> = {
-    parser: {syntax: "ecmascript", jsx: true},
+    parser,
     experimental: {plugins: [[pluginPath, pluginConfig]]},
   };
 
@@ -23,7 +24,9 @@ export function transform(
   }
 
   const options: Options = {
-    filename: path.resolve("tests/e2e/Button.jsx"),
+    filename: path.resolve(
+      parser.syntax === "typescript" ? "tests/e2e/Button.tsx" : "tests/e2e/Button.jsx"
+    ),
     jsc,
   };
   if (swcOptions.isModule !== undefined) {
@@ -32,6 +35,11 @@ export function transform(
 
   return transformSync(source, options).code;
 }
+
+/** SWC options that parse TSX like a TypeScript React project. */
+export const typescript: Pick<Options, "jsc"> = {
+  jsc: {parser: {syntax: "typescript", tsx: true}},
+};
 
 /** SWC options that enable the automatic runtime + React Compiler. */
 export const reactCompiler: Pick<Options, "jsc"> = {

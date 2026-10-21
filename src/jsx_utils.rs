@@ -1,33 +1,58 @@
 use std::borrow::Cow;
 use swc_core::ecma::ast::*;
 
-/// Extract the element name from a JSX element
+/// Extract the element name from a JSX element, or `None` for name syntax the
+/// plugin doesn't know so the element is left unannotated
 #[inline]
-pub fn get_element_name(element: &JSXElementName) -> Cow<'_, str> {
+pub fn get_element_name(element: &JSXElementName) -> Option<Cow<'_, str>> {
     match element {
-        JSXElementName::Ident(ident) => Cow::Borrowed(ident.sym.as_ref()),
+        JSXElementName::Ident(ident) => Some(Cow::Borrowed(ident.sym.as_ref())),
         JSXElementName::JSXMemberExpr(member_expr) => {
-            Cow::Owned(get_member_expression_name(member_expr))
+            get_member_expression_name(member_expr).map(Cow::Owned)
         }
-        JSXElementName::JSXNamespacedName(namespaced) => {
-            Cow::Owned(format!("{}:{}", namespaced.ns.sym, namespaced.name.sym))
-        }
+        JSXElementName::JSXNamespacedName(namespaced) => Some(Cow::Owned(format!(
+            "{}:{}",
+            namespaced.ns.sym, namespaced.name.sym
+        ))),
         #[cfg(swc_ast_unknown)]
-        _ => panic!("unknown jsx element name"),
+        _ => None,
+    }
+}
+
+/// Element names that say nothing about what rendered: polymorphic `<Component>`
+/// tags and members of local values like `<field.Switch>`, which the React
+/// Compiler can also rename (`field_5.Switch`).
+pub fn is_noise_element_name(element: &JSXElementName) -> bool {
+    match element {
+        JSXElementName::Ident(ident) => &*ident.sym == "Component",
+        JSXElementName::JSXMemberExpr(member_expr) => {
+            let mut obj = &member_expr.obj;
+            loop {
+                match obj {
+                    JSXObject::Ident(ident) => {
+                        break ident.sym.starts_with(|c: char| c.is_ascii_lowercase());
+                    }
+                    JSXObject::JSXMemberExpr(nested_member) => obj = &nested_member.obj,
+                    #[cfg(swc_ast_unknown)]
+                    _ => break false,
+                }
+            }
+        }
+        _ => false,
     }
 }
 
 /// Recursively build the name for member expressions (e.g., "Components.UI.Button")
-fn get_member_expression_name(member_expr: &JSXMemberExpr) -> String {
-    fn member_expression_name_len(member_expr: &JSXMemberExpr) -> usize {
+fn get_member_expression_name(member_expr: &JSXMemberExpr) -> Option<String> {
+    fn member_expression_name_len(member_expr: &JSXMemberExpr) -> Option<usize> {
         let obj_len = match &member_expr.obj {
             JSXObject::Ident(ident) => ident.sym.len(),
-            JSXObject::JSXMemberExpr(nested_member) => member_expression_name_len(nested_member),
+            JSXObject::JSXMemberExpr(nested_member) => member_expression_name_len(nested_member)?,
             #[cfg(swc_ast_unknown)]
-            _ => panic!("unknown jsx object"),
+            _ => return None,
         };
 
-        obj_len + 1 + member_expr.prop.sym.len()
+        Some(obj_len + 1 + member_expr.prop.sym.len())
     }
 
     fn push_member_expression_name(target: &mut String, member_expr: &JSXMemberExpr) {
@@ -36,17 +61,18 @@ fn get_member_expression_name(member_expr: &JSXMemberExpr) -> String {
             JSXObject::JSXMemberExpr(nested_member) => {
                 push_member_expression_name(target, nested_member);
             }
+            // `member_expression_name_len` already rejected unknown objects
             #[cfg(swc_ast_unknown)]
-            _ => panic!("unknown jsx object"),
+            _ => {}
         }
 
         target.push('.');
         target.push_str(member_expr.prop.sym.as_ref());
     }
 
-    let mut output = String::with_capacity(member_expression_name_len(member_expr));
+    let mut output = String::with_capacity(member_expression_name_len(member_expr)?);
     push_member_expression_name(&mut output, member_expr);
-    output
+    Some(output)
 }
 
 #[derive(Default)]

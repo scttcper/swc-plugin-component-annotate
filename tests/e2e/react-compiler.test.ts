@@ -360,3 +360,76 @@ test("only source-defined components become owners (guards against compiler help
   );
   assert.deepEqual([...owners], ["List"]);
 });
+
+test("attributes JSX passed through calls in compiled components", () => {
+  const code = transform(
+    `
+      import {createPortal} from "react-dom";
+
+      function Notice() {
+        return tct("Read our [link:privacy policy]", {link: <ExternalLink href="/privacy" />});
+      }
+
+      function Overlay({container}) {
+        return createPortal(<div className="overlay" />, container);
+      }
+
+      function Summary({count, total}) {
+        return tct("[count] of [total]", {
+          count: <Count value={count} />,
+          total: <Count value={total} />,
+        });
+      }
+    `,
+    sentryConfig,
+    reactCompiler
+  );
+
+  assert.match(code, /_jsx\(ExternalLink, \{[^}]*"data-sentry-component": "Notice"/);
+  assert.match(code, /_jsx\("div", \{[^}]*"data-sentry-component": "Overlay"/);
+  assert.equal(code.match(/_jsx\(Count, \{[^}]*"data-sentry-component": "Summary"/g)?.length, 2);
+});
+
+test("gives transparent callsites in render callbacks their component as owner", () => {
+  const code = transform(
+    `
+      function List({items, onSelect}) {
+        return (
+          <ul>
+            {items.map((item) => <Button key={item.id}>{item.label}</Button>)}
+            {items.map((item) => <Button key={item.id} onClick={() => onSelect(item)} />)}
+          </ul>
+        );
+      }
+    `,
+    {...sentryConfig, "transparent-components": ["Button"]},
+    reactCompiler
+  );
+
+  // The first callback is outlined into a `_temp` helper, the second stays inline
+  // because it captures `onSelect`. Both render for List.
+  assert.equal(code.match(/"data-sentry-component": "List-Button"/g)?.length, 2);
+  assert.doesNotMatch(code, /"data-sentry-component": "_temp/);
+});
+
+test("only owns what render callbacks return", () => {
+  const code = transform(
+    `
+      function App({items}) {
+        return (
+          <ul>
+            {items.map((item) => {
+              register(<Button id="registered" />);
+              return <Button id="rendered" key={item.id} />;
+            })}
+          </ul>
+        );
+      }
+    `,
+    {...sentryConfig, "transparent-components": ["Button"]},
+    reactCompiler
+  );
+
+  assert.match(code, /id: "rendered",\s+"data-sentry-component": "App-Button"/);
+  assert.doesNotMatch(code, /id: "registered",\s+"data-sentry-component"/);
+});

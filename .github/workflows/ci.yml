@@ -49,6 +49,8 @@ jobs:
         run: |
           cargo fmt -- --check
           cargo clippy -- -D warnings
+          # The wasm build enables swc_ast_unknown, which native clippy never sees
+          cargo clippy --target wasm32-unknown-unknown -- -D warnings
 
       - name: test
         run: |

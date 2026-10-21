@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import {test} from "node:test";
 
-import {sentryConfig, transform} from "./helpers.ts";
+import {sentryConfig, transform, typescript} from "./helpers.ts";
 
 test("annotates React components through @swc/core", () => {
   const code = transform(`
@@ -69,4 +69,26 @@ test("passes owner metadata through transparent component callsites", () => {
   assert.match(code, /React\.createElement\(Button, \{\s+"aria-label": "Show fingerprints",\s+"data-sentry-component": "MergedItem-Button"/);
   assert.doesNotMatch(code, /"data-sentry-element": "Button"/);
   assert.match(code, /React\.createElement\("button", props\)/);
+});
+
+test("annotates TypeScript components through @swc/core", () => {
+  const code = transform(
+    `
+      import {memo, type FC} from "react";
+
+      type Props = {label: string};
+
+      export const Typed: FC<Props> = ({label}) => <span>{label}</span>;
+      export const Cast = (({label}: Props) => <span>{label}</span>) as FC<Props>;
+      export const Satisfies = (({label}: Props) => <span>{label}</span>) satisfies FC<Props>;
+      export const Memo = memo(({label}: Props) => <span>{label}</span>) as typeof Typed;
+    `,
+    sentryConfig,
+    typescript
+  );
+
+  for (const name of ["Typed", "Cast", "Satisfies", "Memo"]) {
+    assert.match(code, new RegExp(`"data-sentry-component": "${name}"`));
+  }
+  assert.match(code, /"data-sentry-source-file": "Button\.tsx"/);
 });

@@ -90,6 +90,10 @@ Add the plugin to your `.swcrc` configuration:
 
 - **`source-file-attr`** (string, optional): Custom source file attribute name (overrides default and native setting)
 
+- **`source-path-attr`** (string, optional): Adds the file's full path under this attribute name. It's only emitted when set, so leave it out of production builds to keep bundles small.
+
+- **`rewrite-emotion-styled`** (boolean, default: `false`, experimental): Rewrites `const StyledButton = styled(Button)` (with `styled` from `@emotion/styled`) so the rendered `Button` gets `data-element="StyledButton"` plus the source attributes.
+
 ### Sentry Integration
 
 To use Sentry-specific attribute names for compatibility with Sentry's tracking:
@@ -148,6 +152,16 @@ function IssueActions() {
 }
 ```
 
+Those are the callsite attributes. A component that spreads its props onto a DOM element is annotated too, and its own attributes go after the spread, so they replace the forwarded ones. If `Button` renders `<button {...props}>`, the DOM ends up with `Button`'s component name and file:
+
+```html
+<button data-sentry-element="Button" data-sentry-component="Button" data-sentry-source-file="button.tsx">
+  Resolve
+</button>
+```
+
+Sentry's SDK names a clicked node by walking up at most five levels and taking the first `data-sentry-component`, then `data-sentry-element`, so every click on this button reports `Button` from `button.tsx`.
+
 If the React component `Button` is also configured as transparent, it gets the same root owner with its own component name. Transparent wrappers do not accumulate in nested labels:
 
 ```jsx
@@ -163,6 +177,8 @@ function IssueActions() {
 ```
 
 For a `Button` implementation that forwards props to a `button`, those owner attributes become the final DOM attributes.
+
+Transparent callsites inside render callbacks, such as `items.map((item) => <Button />)` in the returned JSX, take the rendering component as their owner too. JSX the component doesn't render, like an argument to `register()`, gets none.
 
 If a transparent component renders a polymorphic DOM element internally, that implementation is not annotated. Forwarded attributes can pass through instead of being overwritten by the transparent component's own file:
 
@@ -180,9 +196,16 @@ The useful result is that layout DOM retains both the owner and the transparent 
 </div>
 ```
 
-Whether to include components such as `Button`, `Link`, `Checkbox`, or `MenuItem` depends on the signal you want in the DOM. Leave them out of `transparent-components` when their component name should be reported as an element. Include them when the combined label is more useful, for example `IssueActions-Button`.
+Whether to include components such as `Button`, `Link`, `Checkbox`, or `MenuItem` depends on the signal you want in the DOM. Leave them out of `transparent-components` when reporting the component itself, `Button` from `button.tsx`, is enough. Include them when the caller matters, so clicks report labels like `IssueActions-Button` with the caller's file.
 
 Use `ignored-components` only when a component should not participate in annotation at all. Ignored components get no generated attributes. Use `transparent-components` when a component should still receive useful owner metadata, but should not report itself as `data-sentry-element`.
+
+#### Names that are left out
+
+Names that wouldn't tell you what rendered are dropped rather than replaced, so the nearest real component gets reported instead:
+
+- Only PascalCase functions count as components. Helpers that return JSX, like `renderRow` or `getIcon`, don't add `data-sentry-component`.
+- Polymorphic `<Component>` tags and members of local values, like `<field.Switch>`, don't get `data-sentry-element`. Members of component namespaces, like `<Fields.Switch>`, keep theirs.
 
 ## Examples
 

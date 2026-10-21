@@ -175,8 +175,70 @@ fn collect_value_sources(value: &Expr, sources: &mut Vec<Id>) -> bool {
             .exprs
             .last()
             .is_some_and(|value| collect_value_sources(value, sources)),
+        // Calls, objects and arrays pass nested JSX into what the component renders,
+        // e.g. `tct('[link]', {link: <Link />})` or `createPortal(<div />, el)`.
+        // Callees and member objects stay out so `$[0]` cache reads aren't origins.
+        Expr::Call(call) => collect_args_sources(&call.args, sources),
+        // A callback handed to a rendered call, like `items.map(t3)`, renders its JSX
+        Expr::Arrow(_) | Expr::Fn(_) => contains_jsx(value),
+        Expr::New(new) => new
+            .args
+            .as_deref()
+            .is_some_and(|args| collect_args_sources(args, sources)),
+        Expr::Array(array) => array
+            .elems
+            .iter()
+            .flatten()
+            .fold(false, |contains_jsx, elem| {
+                collect_value_sources(&elem.expr, sources) | contains_jsx
+            }),
+        Expr::Object(object) => object.props.iter().fold(false, |contains_jsx, prop| {
+            let value_contains_jsx = match prop {
+                PropOrSpread::Spread(spread) => collect_value_sources(&spread.expr, sources),
+                PropOrSpread::Prop(prop) => match prop.as_ref() {
+                    Prop::KeyValue(key_value) => collect_value_sources(&key_value.value, sources),
+                    Prop::Shorthand(ident) => {
+                        sources.push(ident.to_id());
+                        false
+                    }
+                    _ => false,
+                },
+                #[cfg(swc_ast_unknown)]
+                _ => false,
+            };
+            value_contains_jsx | contains_jsx
+        }),
         _ => false,
     }
+}
+
+fn collect_args_sources(args: &[ExprOrSpread], sources: &mut Vec<Id>) -> bool {
+    args.iter().fold(false, |contains_jsx, arg| {
+        collect_value_sources(&arg.expr, sources) | contains_jsx
+    })
+}
+
+fn contains_jsx(expr: &Expr) -> bool {
+    #[derive(Default)]
+    struct JsxFinder {
+        found: bool,
+    }
+
+    impl Visit for JsxFinder {
+        noop_visit_type!();
+
+        fn visit_jsx_element(&mut self, _: &JSXElement) {
+            self.found = true;
+        }
+
+        fn visit_jsx_fragment(&mut self, _: &JSXFragment) {
+            self.found = true;
+        }
+    }
+
+    let mut finder = JsxFinder::default();
+    expr.visit_with(&mut finder);
+    finder.found
 }
 
 fn collect_jsx_child_sources(children: &[JSXElementChild], sources: &mut Vec<Id>) {
@@ -198,7 +260,7 @@ fn collect_jsx_child_sources(children: &[JSXElementChild], sources: &mut Vec<Id>
             }
             JSXElementChild::JSXText(_) => {}
             #[cfg(swc_ast_unknown)]
-            _ => panic!("unknown jsx element child"),
+            _ => {}
         }
     }
 }
@@ -263,7 +325,7 @@ fn return_root_definitions_from_arrow(arrow_expr: &ArrowExpr) -> ReturnRootDefin
             collector.finish()
         }
         #[cfg(swc_ast_unknown)]
-        _ => panic!("unknown block stmt or expr"),
+        _ => ReturnRootDefinitions::default(),
     }
 }
 
@@ -289,6 +351,17 @@ fn commonjs_require_source(expr: &Expr) -> Option<&str> {
     source.value.as_str()
 }
 
+/// Looks through parens and TypeScript `as`/`satisfies` around a component
+/// definition, e.g. `const Button = ((props) => <button />) as FC<Props>`.
+fn unwrap_component_expr(expr: &mut Expr) -> &mut Expr {
+    match expr {
+        Expr::Paren(ParenExpr { expr, .. })
+        | Expr::TsAs(TsAsExpr { expr, .. })
+        | Expr::TsSatisfies(TsSatisfiesExpr { expr, .. }) => unwrap_component_expr(expr),
+        _ => expr,
+    }
+}
+
 pub struct ReactComponentAnnotateVisitor {
     config: PluginConfig,
     source_file_name: Option<Str>,
@@ -311,6 +384,15 @@ pub struct ReactComponentAnnotateVisitor {
     source_path_attr_ident: Option<IdentName>,
     /// Track the local identifier name for `styled` from @emotion/styled
     styled_import: Option<Id>,
+    /// Owner a callback lends to what it returns, captured when the callback is
+    /// entered from rendered output, like a `.map` inside returned JSX.
+    callback_render_owner: Option<Atom>,
+    /// Owner transparent callsites fall back to right now. Only set while visiting
+    /// what a render callback returns, so other JSX in its body stays unowned.
+    active_callback_owner: Option<Atom>,
+    /// React Compiler outlines callbacks into module-level `_temp` helpers. Maps each
+    /// helper to the component that rendered it, or `None` when more than one did.
+    temp_helper_owners: FxHashMap<Atom, Option<Atom>>,
 }
 
 impl ReactComponentAnnotateVisitor {
@@ -360,6 +442,9 @@ impl ReactComponentAnnotateVisitor {
             react_compiler_enabled: false,
             styled_import: None,
             react_memo_identifiers: FxHashSet::default(),
+            callback_render_owner: None,
+            active_callback_owner: None,
+            temp_helper_owners: FxHashMap::default(),
         }
     }
 
@@ -407,6 +492,7 @@ impl ReactComponentAnnotateVisitor {
         element_policy: ComponentAnnotationPolicy,
         existing_attrs: &AttributePresence,
         transparent_owner_component_name: Option<&Atom>,
+        report_element: bool,
     ) -> Option<ElementAttrs> {
         if let Some(ref component_name) = self.current_component_name {
             if self.should_skip_component_return(component_name) {
@@ -418,7 +504,8 @@ impl ReactComponentAnnotateVisitor {
             return None;
         }
 
-        let can_annotate_element = !self.should_ignore_element(element_name)
+        let can_annotate_element = report_element
+            && !self.should_ignore_element(element_name)
             && element_policy == ComponentAnnotationPolicy::Normal;
         let owner_component_name = if element_policy == ComponentAnnotationPolicy::Transparent {
             transparent_owner_component_name
@@ -487,7 +574,8 @@ impl ReactComponentAnnotateVisitor {
         let owner_component_name = self
             .current_component_name
             .as_ref()
-            .or(self.fragment_child_component_name.as_ref())?;
+            .or(self.fragment_child_component_name.as_ref())
+            .or(self.active_callback_owner.as_ref())?;
         let owner_component_name = owner_component_name.as_ref();
         let mut transparent_owner =
             String::with_capacity(owner_component_name.len() + 1 + element_name.len());
@@ -559,7 +647,7 @@ impl ReactComponentAnnotateVisitor {
             ),
             JSXElementName::JSXNamespacedName(_) => false,
             #[cfg(swc_ast_unknown)]
-            _ => panic!("unknown jsx element name"),
+            _ => false,
         }
     }
 
@@ -588,8 +676,6 @@ impl ReactComponentAnnotateVisitor {
                     elem.spread.is_none() && self.expr_may_resolve_to_fragment(&elem.expr)
                 })
             }
-            #[cfg(swc_ast_unknown)]
-            Expr::Unknown(..) => panic!("unknown expr"),
             _ => false,
         }
     }
@@ -615,7 +701,7 @@ impl ReactComponentAnnotateVisitor {
                         Some(ModuleExportName::Str(str)) => str.value.as_str(),
                         None => Some(named_import.local.sym.as_ref()),
                         #[cfg(swc_ast_unknown)]
-                        Some(_) => panic!("unknown module export name"),
+                        Some(_) => None,
                     };
 
                     match imported_name {
@@ -631,7 +717,7 @@ impl ReactComponentAnnotateVisitor {
                     }
                 }
                 #[cfg(swc_ast_unknown)]
-                _ => panic!("unknown import specifier"),
+                _ => {}
             }
         }
     }
@@ -649,8 +735,6 @@ impl ReactComponentAnnotateVisitor {
             Decl::Var(var_decl) => {
                 self.register_var_decl_bindings(var_decl);
             }
-            #[cfg(swc_ast_unknown)]
-            Decl::Unknown(..) => panic!("unknown declaration"),
             _ => {}
         }
     }
@@ -726,7 +810,9 @@ impl ReactComponentAnnotateVisitor {
             && var_declarator.init.is_some()
             && self.return_root_definitions.next_is_root();
         let component_name = match &var_declarator.name {
-            Pat::Ident(ident) => Some(ident.id.sym.clone()),
+            Pat::Ident(ident) if is_component_name(ident.id.sym.as_ref()) => {
+                Some(ident.id.sym.clone())
+            }
             _ => None,
         };
 
@@ -746,7 +832,8 @@ impl ReactComponentAnnotateVisitor {
         }
 
         if let Some(init) = &mut var_declarator.init {
-            match init.as_mut() {
+            let init = unwrap_component_expr(init);
+            match init {
                 Expr::Call(call_expr) => {
                     if let Some(component_name) = component_name.clone() {
                         if self.visit_react_memo_component(call_expr, component_name) {
@@ -795,8 +882,6 @@ impl ReactComponentAnnotateVisitor {
                         init.visit_mut_with(self);
                     }
                 }
-                #[cfg(swc_ast_unknown)]
-                Expr::Unknown(..) => panic!("unknown expr"),
                 _ => init.visit_mut_with(self),
             }
         }
@@ -817,8 +902,6 @@ impl ReactComponentAnnotateVisitor {
             Stmt::Decl(Decl::Var(var_decl)) => {
                 self.visit_var_decl(var_decl, false);
             }
-            #[cfg(swc_ast_unknown)]
-            Stmt::Unknown(..) => panic!("unknown statement"),
             _ => stmt.visit_mut_with(self),
         }
     }
@@ -830,16 +913,12 @@ impl ReactComponentAnnotateVisitor {
                     Decl::Var(var_decl) => {
                         self.visit_var_decl(var_decl, false);
                     }
-                    #[cfg(swc_ast_unknown)]
-                    Decl::Unknown(..) => panic!("unknown declaration"),
                     _ => item.visit_mut_with(self),
                 }
             }
             ModuleItem::Stmt(stmt) => {
                 self.visit_predeclared_stmt(stmt);
             }
-            #[cfg(swc_ast_unknown)]
-            ModuleItem::Unknown(..) => panic!("unknown module item"),
             _ => item.visit_mut_with(self),
         }
     }
@@ -856,20 +935,13 @@ impl ReactComponentAnnotateVisitor {
             ModuleItem::Stmt(Stmt::Decl(decl)) => {
                 self.register_decl_bindings(decl);
             }
-            #[cfg(swc_ast_unknown)]
-            ModuleItem::Unknown(..) => panic!("unknown module item"),
             _ => {}
         }
     }
 
     fn register_script_stmt_bindings(&mut self, stmt: &Stmt) {
-        match stmt {
-            Stmt::Decl(decl) => {
-                self.register_decl_bindings(decl);
-            }
-            #[cfg(swc_ast_unknown)]
-            Stmt::Unknown(..) => panic!("unknown statement"),
-            _ => {}
+        if let Stmt::Decl(decl) = stmt {
+            self.register_decl_bindings(decl);
         }
     }
 
@@ -887,8 +959,6 @@ impl ReactComponentAnnotateVisitor {
                         Expr::Ident(obj) if self.is_global_react_namespace_identifier(obj)
                     )
             }
-            #[cfg(swc_ast_unknown)]
-            Expr::Unknown(..) => panic!("unknown expr"),
             _ => false,
         }
     }
@@ -909,15 +979,13 @@ impl ReactComponentAnnotateVisitor {
             return false;
         }
 
-        match component_arg.expr.as_mut() {
+        match unwrap_component_expr(&mut component_arg.expr) {
             Expr::Arrow(arrow_expr) => {
                 self.visit_arrow_as_component(arrow_expr, component_name);
             }
             Expr::Fn(function_expr) => {
                 self.visit_function_as_component(&mut function_expr.function, component_name);
             }
-            #[cfg(swc_ast_unknown)]
-            Expr::Unknown(..) => panic!("unknown expr"),
             _ => return false,
         }
 
@@ -982,7 +1050,9 @@ impl ReactComponentAnnotateVisitor {
             return;
         }
 
-        let element_name = get_element_name(&opening_element.name);
+        let Some(element_name) = get_element_name(&opening_element.name) else {
+            return;
+        };
         let element_policy = self.component_annotation_policy(&element_name);
         let transparent_owner_component_name =
             if element_policy == ComponentAnnotationPolicy::Transparent {
@@ -1003,6 +1073,7 @@ impl ReactComponentAnnotateVisitor {
             element_policy,
             &existing_attrs,
             transparent_owner_component_name.as_ref(),
+            !is_noise_element_name(&opening_element.name),
         ) else {
             return;
         };
@@ -1024,11 +1095,28 @@ impl ReactComponentAnnotateVisitor {
         }
     }
 
+    /// Owner of JSX rendered at this point, if any. Ignored components lend no name.
+    fn render_owner(&self) -> Option<Atom> {
+        self.current_component_name
+            .as_ref()
+            .or(self.fragment_child_component_name.as_ref())
+            .or(self.active_callback_owner.as_ref())
+            .filter(|owner| {
+                self.component_annotation_policy(owner.as_ref())
+                    == ComponentAnnotationPolicy::Normal
+            })
+            .cloned()
+    }
+
     fn visit_function_as_component(&mut self, func: &mut Function, component_name: Atom) {
         if self.should_skip_component_child_traversal(component_name.as_ref()) {
             return;
         }
 
+        let prev_callback_owners = (
+            self.callback_render_owner.take(),
+            self.active_callback_owner.take(),
+        );
         let prev_return_component = self.current_return_component_name.replace(component_name);
         let prev_component = self.current_component_name.take();
         let prev_fragment_child_component = self.fragment_child_component_name.take();
@@ -1046,6 +1134,7 @@ impl ReactComponentAnnotateVisitor {
         func.visit_mut_children_with(self);
         self.jsx_bindings.pop();
 
+        (self.callback_render_owner, self.active_callback_owner) = prev_callback_owners;
         self.current_return_component_name = prev_return_component;
         self.current_component_name = prev_component;
         self.fragment_child_component_name = prev_fragment_child_component;
@@ -1061,6 +1150,10 @@ impl ReactComponentAnnotateVisitor {
             return;
         }
 
+        let prev_callback_owners = (
+            self.callback_render_owner.take(),
+            self.active_callback_owner.take(),
+        );
         let prev_return_component = self.current_return_component_name.replace(component_name);
         let prev_component = self.current_component_name.take();
         let prev_fragment_child_component = self.fragment_child_component_name.take();
@@ -1083,10 +1176,11 @@ impl ReactComponentAnnotateVisitor {
                 self.visit_component_return_expr(expr);
             }
             #[cfg(swc_ast_unknown)]
-            _ => panic!("unknown block stmt or expr"),
+            _ => {}
         }
         self.jsx_bindings.pop();
 
+        (self.callback_render_owner, self.active_callback_owner) = prev_callback_owners;
         self.current_return_component_name = prev_return_component;
         self.current_component_name = prev_component;
         self.fragment_child_component_name = prev_fragment_child_component;
@@ -1099,7 +1193,7 @@ impl ReactComponentAnnotateVisitor {
 
     fn visit_component_return_expr(&mut self, expr: &mut Expr) {
         let Some(component_name) = self.current_return_component_name.clone() else {
-            expr.visit_mut_with(self);
+            self.visit_callback_return_expr(expr);
             return;
         };
 
@@ -1110,6 +1204,17 @@ impl ReactComponentAnnotateVisitor {
 
         self.current_component_name = prev_component;
         self.fragment_child_component_name = prev_fragment_child_component;
+    }
+
+    /// Visits what a callback returns with the owner its render context lends it.
+    /// Outside render callbacks that owner is `None`, so nothing changes.
+    fn visit_callback_return_expr(&mut self, expr: &mut Expr) {
+        let prev_active_owner = std::mem::replace(
+            &mut self.active_callback_owner,
+            self.callback_render_owner.clone(),
+        );
+        expr.visit_mut_with(self);
+        self.active_callback_owner = prev_active_owner;
     }
 }
 
@@ -1155,7 +1260,7 @@ impl VisitMut for ReactComponentAnnotateVisitor {
                             Some(ModuleExportName::Str(str)) => str.value.as_str(),
                             None => Some(named_import.local.sym.as_ref()),
                             #[cfg(swc_ast_unknown)]
-                            Some(_) => panic!("unknown module export name"),
+                            Some(_) => None,
                         };
 
                         if let Some(imported_name) = imported_name {
@@ -1166,7 +1271,7 @@ impl VisitMut for ReactComponentAnnotateVisitor {
                     }
                     ImportSpecifier::Namespace(_) => {}
                     #[cfg(swc_ast_unknown)]
-                    _ => panic!("unknown import specifier"),
+                    _ => {}
                 }
             }
         }
@@ -1180,15 +1285,51 @@ impl VisitMut for ReactComponentAnnotateVisitor {
             .insert(func_decl.ident.to_id(), JsxIdentifierStatus::Annotatable);
 
         // React Compiler helpers (`_temp`, `_temp2`, ...) are extracted inline
-        // callbacks, not components; traverse without attributing their JSX.
+        // callbacks, not components; traverse without attributing their JSX. The
+        // compiler emits them after the component that renders them, so transparent
+        // callsites inside can still fall back to that component.
         if is_react_compiler_temp(component_name.as_ref()) {
+            let owner = self
+                .temp_helper_owners
+                .get(&component_name)
+                .cloned()
+                .flatten();
+            let prev_active_owner = std::mem::replace(&mut self.active_callback_owner, owner);
             self.visit_mut_function(&mut func_decl.function);
-        } else {
+            self.active_callback_owner = prev_active_owner;
+        } else if is_component_name(component_name.as_ref()) {
             self.visit_function_as_component(&mut func_decl.function, component_name);
+        } else {
+            self.visit_mut_function(&mut func_decl.function);
         }
     }
 
+    fn visit_mut_ident(&mut self, ident: &mut Ident) {
+        if !self.react_compiler_enabled || !is_react_compiler_temp(ident.sym.as_ref()) {
+            return;
+        }
+        let Some(owner) = self.render_owner() else {
+            return;
+        };
+
+        self.temp_helper_owners
+            .entry(ident.sym.clone())
+            .and_modify(|existing| {
+                if existing.as_ref() != Some(&owner) {
+                    *existing = None;
+                }
+            })
+            .or_insert_with(|| Some(owner));
+    }
+
     fn visit_mut_function(&mut self, function: &mut Function) {
+        // Only what this callback returns renders for the current owner; its
+        // `return` statements pick the owner up again in `visit_component_return_expr`.
+        let render_owner = self.render_owner();
+        let prev_callback_owners = (
+            std::mem::replace(&mut self.callback_render_owner, render_owner),
+            self.active_callback_owner.take(),
+        );
         let prev_return_component = self.current_return_component_name.take();
         let prev_component = self.current_component_name.take();
         let prev_fragment_child_component = self.fragment_child_component_name.take();
@@ -1199,6 +1340,7 @@ impl VisitMut for ReactComponentAnnotateVisitor {
         function.visit_mut_children_with(self);
         self.jsx_bindings.pop();
 
+        (self.callback_render_owner, self.active_callback_owner) = prev_callback_owners;
         self.current_return_component_name = prev_return_component;
         self.current_component_name = prev_component;
         self.fragment_child_component_name = prev_fragment_child_component;
@@ -1224,13 +1366,7 @@ impl VisitMut for ReactComponentAnnotateVisitor {
                 {
                     self.visit_function_as_component(&mut method.function, component_name.clone());
                 }
-                ClassMember::Method(method) => match &method.key {
-                    #[cfg(swc_ast_unknown)]
-                    PropName::Unknown(..) => panic!("unknown prop name"),
-                    _ => method.visit_mut_children_with(self),
-                },
-                #[cfg(swc_ast_unknown)]
-                ClassMember::Unknown(..) => panic!("unknown class member"),
+                ClassMember::Method(method) => method.visit_mut_children_with(self),
                 _ => member.visit_mut_with(self),
             }
         }
@@ -1283,6 +1419,11 @@ impl VisitMut for ReactComponentAnnotateVisitor {
     }
 
     fn visit_mut_arrow_expr(&mut self, arrow_expr: &mut ArrowExpr) {
+        let render_owner = self.render_owner();
+        let prev_callback_owners = (
+            std::mem::replace(&mut self.callback_render_owner, render_owner),
+            self.active_callback_owner.take(),
+        );
         let prev_return_component = self.current_return_component_name.take();
         let prev_component = self.current_component_name.take();
         let prev_fragment_child_component = self.fragment_child_component_name.take();
@@ -1290,9 +1431,15 @@ impl VisitMut for ReactComponentAnnotateVisitor {
 
         self.jsx_bindings
             .push_function_with(collect_pat_list_scope(&arrow_expr.params));
-        arrow_expr.visit_mut_children_with(self);
+        arrow_expr.params.visit_mut_with(self);
+        match arrow_expr.body.as_mut() {
+            // A concise body is the callback's return value
+            ArrowFunctionBody::Expr(expr) => self.visit_callback_return_expr(expr),
+            body => body.visit_mut_with(self),
+        }
         self.jsx_bindings.pop();
 
+        (self.callback_render_owner, self.active_callback_owner) = prev_callback_owners;
         self.current_return_component_name = prev_return_component;
         self.current_component_name = prev_component;
         self.fragment_child_component_name = prev_fragment_child_component;
@@ -1329,6 +1476,13 @@ impl VisitMut for ReactComponentAnnotateVisitor {
     fn visit_mut_jsx_fragment(&mut self, jsx_fragment: &mut JSXFragment) {
         self.process_jsx_fragment(jsx_fragment);
     }
+}
+
+/// React components are PascalCase. Lowercase functions that return JSX, like
+/// `renderRow` or `getIcon`, are helpers whose names would only be DOM noise.
+#[inline]
+fn is_component_name(name: &str) -> bool {
+    name.starts_with(|c: char| c.is_ascii_uppercase())
 }
 
 /// Matches the module-scope helper names the React Compiler generates when it

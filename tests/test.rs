@@ -3,7 +3,7 @@ use swc_core::{
     common::{FileName, Mark},
     ecma::{
         ast::Pass,
-        parser::{EsSyntax, Syntax},
+        parser::{EsSyntax, Syntax, TsSyntax},
         transforms::{
             base::resolver,
             testing::{test, test_fixture},
@@ -100,10 +100,14 @@ fn test_extract_filename() {
 }
 
 #[testing::fixture("tests/fixture/react_*/input.jsx")]
+#[testing::fixture("tests/fixture/react_*/input.tsx")]
 fn test(input: PathBuf) {
     let dir = input.parent().unwrap().to_path_buf();
+    let tsx = input.extension().unwrap() == "tsx";
     let jsx = input.extension().unwrap() == "jsx";
-    let output = if jsx {
+    let output = if tsx {
+        dir.join("output.tsx")
+    } else if jsx {
         dir.join("output.jsx")
     } else {
         dir.join("output.js")
@@ -179,15 +183,26 @@ fn test(input: PathBuf) {
             "/mock/absolute/path/tests/fixture/react_forwarded_props_precedence/input.jsx"
                 .to_string(),
         )
+    } else if tsx {
+        FileName::Custom("test.tsx".to_string())
     } else {
         FileName::Custom("test.jsx".to_string())
     };
 
-    test_fixture(
+    let syntax = if tsx {
+        Syntax::Typescript(TsSyntax {
+            tsx: true,
+            ..Default::default()
+        })
+    } else {
         Syntax::Es(EsSyntax {
             jsx,
             ..Default::default()
-        }),
+        })
+    };
+
+    test_fixture(
+        syntax,
         &|_| tr_with_config_and_filename(config.clone(), filename.clone()),
         &input,
         &output,

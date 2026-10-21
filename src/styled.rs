@@ -13,8 +13,6 @@ pub(crate) fn styled_call_component_ref(
     let callee_id = match call_expr.callee.as_expr() {
         Some(expr) => match expr.as_ref() {
             Expr::Ident(ident) => ident.to_id(),
-            #[cfg(swc_ast_unknown)]
-            Expr::Unknown(..) => panic!("unknown expr"),
             _ => return None,
         },
         _ => return None,
