@@ -87,6 +87,10 @@ Add the plugin to your `.swcrc` configuration:
 
 - **`source-file-attr`** (string, optional): Custom source file attribute name (overrides default and native setting)
 
+- **`source-path-attr`** (string, optional): Adds the file's full path under this attribute name. It's only emitted when set, so leave it out of production builds to keep bundles small.
+
+- **`rewrite-emotion-styled`** (boolean, default: `false`, experimental): Rewrites `const StyledButton = styled(Button)` (with `styled` from `@emotion/styled`) so the rendered `Button` gets `data-element="StyledButton"` plus the source attributes.
+
 ### Sentry Integration
 
 To use Sentry-specific attribute names for compatibility with Sentry's tracking:

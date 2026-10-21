@@ -161,7 +161,7 @@ pub(crate) fn collect_pat_identifiers_with_status(
                         collect_pat_identifiers_with_status(&rest.arg, status, add);
                     }
                     #[cfg(swc_ast_unknown)]
-                    _ => panic!("unknown object pattern prop"),
+                    _ => {}
                 }
             }
         }
@@ -171,8 +171,6 @@ pub(crate) fn collect_pat_identifiers_with_status(
         Pat::Assign(assign_pat) => {
             collect_pat_identifiers_with_status(&assign_pat.left, status, add);
         }
-        #[cfg(swc_ast_unknown)]
-        Pat::Unknown(..) => panic!("unknown pattern"),
         _ => {}
     }
 }

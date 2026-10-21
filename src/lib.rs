@@ -198,7 +198,7 @@ fn collect_jsx_child_sources(children: &[JSXElementChild], sources: &mut Vec<Id>
             }
             JSXElementChild::JSXText(_) => {}
             #[cfg(swc_ast_unknown)]
-            _ => panic!("unknown jsx element child"),
+            _ => {}
         }
     }
 }
@@ -263,7 +263,7 @@ fn return_root_definitions_from_arrow(arrow_expr: &ArrowExpr) -> ReturnRootDefin
             collector.finish()
         }
         #[cfg(swc_ast_unknown)]
-        _ => panic!("unknown block stmt or expr"),
+        _ => ReturnRootDefinitions::default(),
     }
 }
 
@@ -287,6 +287,17 @@ fn commonjs_require_source(expr: &Expr) -> Option<&str> {
         return None;
     };
     source.value.as_str()
+}
+
+/// Looks through parens and TypeScript `as`/`satisfies` around a component
+/// definition, e.g. `const Button = ((props) => <button />) as FC<Props>`.
+fn unwrap_component_expr(expr: &mut Expr) -> &mut Expr {
+    match expr {
+        Expr::Paren(ParenExpr { expr, .. })
+        | Expr::TsAs(TsAsExpr { expr, .. })
+        | Expr::TsSatisfies(TsSatisfiesExpr { expr, .. }) => unwrap_component_expr(expr),
+        _ => expr,
+    }
 }
 
 pub struct ReactComponentAnnotateVisitor {
@@ -559,7 +570,7 @@ impl ReactComponentAnnotateVisitor {
             ),
             JSXElementName::JSXNamespacedName(_) => false,
             #[cfg(swc_ast_unknown)]
-            _ => panic!("unknown jsx element name"),
+            _ => false,
         }
     }
 
@@ -588,8 +599,6 @@ impl ReactComponentAnnotateVisitor {
                     elem.spread.is_none() && self.expr_may_resolve_to_fragment(&elem.expr)
                 })
             }
-            #[cfg(swc_ast_unknown)]
-            Expr::Unknown(..) => panic!("unknown expr"),
             _ => false,
         }
     }
@@ -615,7 +624,7 @@ impl ReactComponentAnnotateVisitor {
                         Some(ModuleExportName::Str(str)) => str.value.as_str(),
                         None => Some(named_import.local.sym.as_ref()),
                         #[cfg(swc_ast_unknown)]
-                        Some(_) => panic!("unknown module export name"),
+                        Some(_) => None,
                     };
 
                     match imported_name {
@@ -631,7 +640,7 @@ impl ReactComponentAnnotateVisitor {
                     }
                 }
                 #[cfg(swc_ast_unknown)]
-                _ => panic!("unknown import specifier"),
+                _ => {}
             }
         }
     }
@@ -649,8 +658,6 @@ impl ReactComponentAnnotateVisitor {
             Decl::Var(var_decl) => {
                 self.register_var_decl_bindings(var_decl);
             }
-            #[cfg(swc_ast_unknown)]
-            Decl::Unknown(..) => panic!("unknown declaration"),
             _ => {}
         }
     }
@@ -746,7 +753,8 @@ impl ReactComponentAnnotateVisitor {
         }
 
         if let Some(init) = &mut var_declarator.init {
-            match init.as_mut() {
+            let init = unwrap_component_expr(init);
+            match init {
                 Expr::Call(call_expr) => {
                     if let Some(component_name) = component_name.clone() {
                         if self.visit_react_memo_component(call_expr, component_name) {
@@ -795,8 +803,6 @@ impl ReactComponentAnnotateVisitor {
                         init.visit_mut_with(self);
                     }
                 }
-                #[cfg(swc_ast_unknown)]
-                Expr::Unknown(..) => panic!("unknown expr"),
                 _ => init.visit_mut_with(self),
             }
         }
@@ -817,8 +823,6 @@ impl ReactComponentAnnotateVisitor {
             Stmt::Decl(Decl::Var(var_decl)) => {
                 self.visit_var_decl(var_decl, false);
             }
-            #[cfg(swc_ast_unknown)]
-            Stmt::Unknown(..) => panic!("unknown statement"),
             _ => stmt.visit_mut_with(self),
         }
     }
@@ -830,16 +834,12 @@ impl ReactComponentAnnotateVisitor {
                     Decl::Var(var_decl) => {
                         self.visit_var_decl(var_decl, false);
                     }
-                    #[cfg(swc_ast_unknown)]
-                    Decl::Unknown(..) => panic!("unknown declaration"),
                     _ => item.visit_mut_with(self),
                 }
             }
             ModuleItem::Stmt(stmt) => {
                 self.visit_predeclared_stmt(stmt);
             }
-            #[cfg(swc_ast_unknown)]
-            ModuleItem::Unknown(..) => panic!("unknown module item"),
             _ => item.visit_mut_with(self),
         }
     }
@@ -856,20 +856,13 @@ impl ReactComponentAnnotateVisitor {
             ModuleItem::Stmt(Stmt::Decl(decl)) => {
                 self.register_decl_bindings(decl);
             }
-            #[cfg(swc_ast_unknown)]
-            ModuleItem::Unknown(..) => panic!("unknown module item"),
             _ => {}
         }
     }
 
     fn register_script_stmt_bindings(&mut self, stmt: &Stmt) {
-        match stmt {
-            Stmt::Decl(decl) => {
-                self.register_decl_bindings(decl);
-            }
-            #[cfg(swc_ast_unknown)]
-            Stmt::Unknown(..) => panic!("unknown statement"),
-            _ => {}
+        if let Stmt::Decl(decl) = stmt {
+            self.register_decl_bindings(decl);
         }
     }
 
@@ -887,8 +880,6 @@ impl ReactComponentAnnotateVisitor {
                         Expr::Ident(obj) if self.is_global_react_namespace_identifier(obj)
                     )
             }
-            #[cfg(swc_ast_unknown)]
-            Expr::Unknown(..) => panic!("unknown expr"),
             _ => false,
         }
     }
@@ -909,15 +900,13 @@ impl ReactComponentAnnotateVisitor {
             return false;
         }
 
-        match component_arg.expr.as_mut() {
+        match unwrap_component_expr(&mut component_arg.expr) {
             Expr::Arrow(arrow_expr) => {
                 self.visit_arrow_as_component(arrow_expr, component_name);
             }
             Expr::Fn(function_expr) => {
                 self.visit_function_as_component(&mut function_expr.function, component_name);
             }
-            #[cfg(swc_ast_unknown)]
-            Expr::Unknown(..) => panic!("unknown expr"),
             _ => return false,
         }
 
@@ -982,7 +971,9 @@ impl ReactComponentAnnotateVisitor {
             return;
         }
 
-        let element_name = get_element_name(&opening_element.name);
+        let Some(element_name) = get_element_name(&opening_element.name) else {
+            return;
+        };
         let element_policy = self.component_annotation_policy(&element_name);
         let transparent_owner_component_name =
             if element_policy == ComponentAnnotationPolicy::Transparent {
@@ -1083,7 +1074,7 @@ impl ReactComponentAnnotateVisitor {
                 self.visit_component_return_expr(expr);
             }
             #[cfg(swc_ast_unknown)]
-            _ => panic!("unknown block stmt or expr"),
+            _ => {}
         }
         self.jsx_bindings.pop();
 
@@ -1155,7 +1146,7 @@ impl VisitMut for ReactComponentAnnotateVisitor {
                             Some(ModuleExportName::Str(str)) => str.value.as_str(),
                             None => Some(named_import.local.sym.as_ref()),
                             #[cfg(swc_ast_unknown)]
-                            Some(_) => panic!("unknown module export name"),
+                            Some(_) => None,
                         };
 
                         if let Some(imported_name) = imported_name {
@@ -1166,7 +1157,7 @@ impl VisitMut for ReactComponentAnnotateVisitor {
                     }
                     ImportSpecifier::Namespace(_) => {}
                     #[cfg(swc_ast_unknown)]
-                    _ => panic!("unknown import specifier"),
+                    _ => {}
                 }
             }
         }
@@ -1224,13 +1215,7 @@ impl VisitMut for ReactComponentAnnotateVisitor {
                 {
                     self.visit_function_as_component(&mut method.function, component_name.clone());
                 }
-                ClassMember::Method(method) => match &method.key {
-                    #[cfg(swc_ast_unknown)]
-                    PropName::Unknown(..) => panic!("unknown prop name"),
-                    _ => method.visit_mut_children_with(self),
-                },
-                #[cfg(swc_ast_unknown)]
-                ClassMember::Unknown(..) => panic!("unknown class member"),
+                ClassMember::Method(method) => method.visit_mut_children_with(self),
                 _ => member.visit_mut_with(self),
             }
         }
