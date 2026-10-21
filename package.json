@@ -17,7 +17,6 @@
   },
   "main": "swc_plugin_component_annotate.wasm",
   "files": [
-    "src",
     "swc_plugin_component_annotate.wasm"
   ],
   "homepage": "https://github.com/scttcper/swc-plugin-component-annotate#readme",
