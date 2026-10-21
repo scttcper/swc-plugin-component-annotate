@@ -175,6 +175,8 @@ function IssueActions() {
 
 For a `Button` implementation that forwards props to a `button`, those owner attributes become the final DOM attributes.
 
+Transparent callsites inside render callbacks, such as `items.map((item) => <Button />)` in the returned JSX, take the rendering component as their owner too. JSX the component doesn't render, like an argument to `register()`, gets none.
+
 If a transparent component renders a polymorphic DOM element internally, that implementation is not annotated. Forwarded attributes can pass through instead of being overwritten by the transparent component's own file:
 
 ```jsx

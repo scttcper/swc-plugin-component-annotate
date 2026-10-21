@@ -89,3 +89,20 @@ function Text(props) {
 function Link(props) {
   return <a {...props} />;
 }
+
+function ItemList({items, onSelect}) {
+  return (
+    <ul>
+      {items.map((item) => (
+        <Button key={item.id} onClick={() => onSelect(item)}>
+          {item.label}
+        </Button>
+      ))}
+    </ul>
+  );
+}
+
+function Registrar() {
+  register(<Button>Later</Button>);
+  return <div />;
+}

@@ -67,3 +67,14 @@ function Text(props) {
 function Link(props) {
     return <a {...props}/>;
 }
+function ItemList({ items, onSelect }) {
+    return <ul data-component="ItemList" data-source-file="test.jsx">
+      {items.map((item)=><Button key={item.id} onClick={()=>onSelect(item)} data-component="ItemList-Button" data-source-file="test.jsx">
+          {item.label}
+        </Button>)}
+    </ul>;
+}
+function Registrar() {
+    register(<Button>Later</Button>);
+    return <div data-component="Registrar" data-source-file="test.jsx"/>;
+}

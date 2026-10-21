@@ -389,3 +389,25 @@ test("attributes JSX passed through calls in compiled components", () => {
   assert.match(code, /_jsx\("div", \{[^}]*"data-sentry-component": "Overlay"/);
   assert.equal(code.match(/_jsx\(Count, \{[^}]*"data-sentry-component": "Summary"/g)?.length, 2);
 });
+
+test("gives transparent callsites in render callbacks their component as owner", () => {
+  const code = transform(
+    `
+      function List({items, onSelect}) {
+        return (
+          <ul>
+            {items.map((item) => <Button key={item.id}>{item.label}</Button>)}
+            {items.map((item) => <Button key={item.id} onClick={() => onSelect(item)} />)}
+          </ul>
+        );
+      }
+    `,
+    {...sentryConfig, "transparent-components": ["Button"]},
+    reactCompiler
+  );
+
+  // The first callback is outlined into a `_temp` helper, the second stays inline
+  // because it captures `onSelect`. Both render for List.
+  assert.equal(code.match(/"data-sentry-component": "List-Button"/g)?.length, 2);
+  assert.doesNotMatch(code, /"data-sentry-component": "_temp/);
+});
