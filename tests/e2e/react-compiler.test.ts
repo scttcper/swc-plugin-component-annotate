@@ -622,3 +622,22 @@ test("annotates a tag the compiler hoists into a T0 binding like the tag itself"
   assert.match(compiled, /T0 = Panel;/);
   assert.match(compiled, /T0 = form\.AppForm;/);
 });
+
+test("annotates `export default function` components with React Compiler enabled", () => {
+  const code = transform(
+    `
+      export default function AdminNote({message}) {
+        return (
+          <Box>
+            <Text>{message}</Text>
+          </Box>
+        );
+      }
+    `,
+    sentryConfig,
+    reactCompiler
+  );
+
+  assert.match(code, /_jsx\(Box, \{\s+"data-sentry-element": "Box",\s+"data-sentry-component": "AdminNote"/);
+  assert.match(code, /_jsx\(Text, \{\s+"data-sentry-element": "Text"/);
+});
