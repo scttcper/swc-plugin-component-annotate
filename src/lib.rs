@@ -1147,6 +1147,12 @@ impl ReactComponentAnnotateVisitor {
             ModuleItem::ModuleDecl(ModuleDecl::ExportDecl(export_decl)) => {
                 self.register_decl_bindings(&export_decl.decl);
             }
+            ModuleItem::ModuleDecl(ModuleDecl::ExportDefaultDecl(export_default_decl)) => {
+                if let Some(ident) = default_decl_ident(&export_default_decl.decl) {
+                    self.jsx_bindings
+                        .insert(ident.to_id(), JsxIdentifierStatus::Annotatable);
+                }
+            }
             ModuleItem::Stmt(Stmt::Decl(decl)) => {
                 self.register_decl_bindings(decl);
             }
@@ -1337,6 +1343,23 @@ impl ReactComponentAnnotateVisitor {
                     == ComponentAnnotationPolicy::Normal
             })
             .cloned()
+    }
+
+    fn visit_class_as_component(&mut self, class: &mut Class, component_name: Atom) {
+        if self.should_skip_component_child_traversal(component_name.as_ref()) {
+            return;
+        }
+
+        for member in &mut class.body {
+            match member {
+                ClassMember::Method(method) if matches!(&method.key, PropName::Ident(ident) if ident.sym.as_ref() == "render") =>
+                {
+                    self.visit_function_as_component(&mut method.function, component_name.clone());
+                }
+                ClassMember::Method(method) => method.visit_mut_children_with(self),
+                _ => member.visit_mut_with(self),
+            }
+        }
     }
 
     fn visit_function_as_component(&mut self, func: &mut Function, component_name: Atom) {
@@ -1622,23 +1645,33 @@ impl VisitMut for ReactComponentAnnotateVisitor {
     }
 
     fn visit_mut_class_decl(&mut self, class_decl: &mut ClassDecl) {
-        let component_name = class_decl.ident.sym.clone();
         self.jsx_bindings
             .insert(class_decl.ident.to_id(), JsxIdentifierStatus::Annotatable);
+        self.visit_class_as_component(&mut class_decl.class, class_decl.ident.sym.clone());
+    }
 
-        if self.should_skip_component_child_traversal(component_name.as_ref()) {
-            return;
-        }
-
-        for member in &mut class_decl.class.body {
-            match member {
-                ClassMember::Method(method) if matches!(&method.key, PropName::Ident(ident) if ident.sym.as_ref() == "render") =>
-                {
-                    self.visit_function_as_component(&mut method.function, component_name.clone());
-                }
-                ClassMember::Method(method) => method.visit_mut_children_with(self),
-                _ => member.visit_mut_with(self),
+    // `export default function Name() {}` and `export default class Name {}` are
+    // `ExportDefaultDecl`s with a named `FnExpr` / `ClassExpr`, so the
+    // `FnDecl` / `ClassDecl` visitors above never see them.
+    fn visit_mut_export_default_decl(&mut self, export_default_decl: &mut ExportDefaultDecl) {
+        match &mut export_default_decl.decl {
+            DefaultDecl::Fn(FnExpr {
+                ident: Some(ident),
+                function,
+            }) if is_component_name(ident.sym.as_ref()) => {
+                self.jsx_bindings
+                    .insert(ident.to_id(), JsxIdentifierStatus::Annotatable);
+                self.visit_function_as_component(function, ident.sym.clone());
             }
+            DefaultDecl::Class(ClassExpr {
+                ident: Some(ident),
+                class,
+            }) => {
+                self.jsx_bindings
+                    .insert(ident.to_id(), JsxIdentifierStatus::Annotatable);
+                self.visit_class_as_component(class, ident.sym.clone());
+            }
+            _ => export_default_decl.visit_mut_children_with(self),
         }
     }
 
@@ -1762,6 +1795,15 @@ impl VisitMut for ReactComponentAnnotateVisitor {
 #[inline]
 fn is_component_name(name: &str) -> bool {
     name.starts_with(|c: char| c.is_ascii_uppercase())
+}
+
+/// The name of `export default function Name() {}` or `export default class Name {}`.
+fn default_decl_ident(decl: &DefaultDecl) -> Option<&Ident> {
+    match decl {
+        DefaultDecl::Fn(fn_expr) => fn_expr.ident.as_ref(),
+        DefaultDecl::Class(class_expr) => class_expr.ident.as_ref(),
+        _ => None,
+    }
 }
 
 /// Matches the module-scope helper names the React Compiler generates when it
