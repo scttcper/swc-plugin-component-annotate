@@ -28,12 +28,12 @@
     "url": "https://github.com/scttcper/swc-plugin-component-annotate/issues"
   },
   "devDependencies": {
-    "@rspack/core": "2.2.9",
-    "@swc/core": "1.16.18",
-    "@types/node": "26.6.5",
+    "@rspack/core": "2.3.4",
+    "@swc/core": "1.16.22",
+    "@types/node": "26.6.7",
     "typescript": "7.0.2"
   },
-  "packageManager": "pnpm@11.28.6",
+  "packageManager": "pnpm@11.29.0",
   "release": {
     "branches": [
       "main"
