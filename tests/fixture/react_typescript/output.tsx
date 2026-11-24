@@ -20,10 +20,10 @@ export class ClassComponent extends React.Component<Props> {
 }
 // Parens and TypeScript wrappers around the component definition
 export const ParenArrow = ({ label }: Props)=><span data-component="ParenArrow" data-source-file="test.tsx">{label}</span>;
-export const CastArrow = ({ label }: Props)=><span data-component="CastArrow" data-source-file="test.tsx">{label}</span> as FC<Props>;
-export const SatisfiesArrow = ({ label }: Props)=><span data-component="SatisfiesArrow" data-source-file="test.tsx">{label}</span> satisfies FC<Props>;
+export const CastArrow = (({ label }: Props)=><span data-component="CastArrow" data-source-file="test.tsx">{label}</span>) as FC<Props>;
+export const SatisfiesArrow = (({ label }: Props)=><span data-component="SatisfiesArrow" data-source-file="test.tsx">{label}</span>) satisfies FC<Props>;
 export const CastMemo = memo(({ label }: Props)=><span data-component="CastMemo" data-source-file="test.tsx">{label}</span>) as typeof TypedArrow;
-export const MemoCastArg = memo(({ label }: Props)=><span data-component="MemoCastArg" data-source-file="test.tsx">{label}</span> as FC<Props>);
+export const MemoCastArg = memo((({ label }: Props)=><span data-component="MemoCastArg" data-source-file="test.tsx">{label}</span>) as FC<Props>);
 // TypeScript wrappers around the returned JSX
 export function AsReturn(): ReactElement {
     return <div data-component="AsReturn" data-source-file="test.tsx"/> as ReactElement;

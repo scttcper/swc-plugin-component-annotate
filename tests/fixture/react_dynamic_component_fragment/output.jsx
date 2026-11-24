@@ -81,8 +81,8 @@ export function BareBlockAliasAppliesInside({ children }) {
 export function SwitchAliasDoesNotLeak({ kind, children }) {
     switch(kind){
         case 'fragment':
-            const Provider = Fragment;
-            Provider;
+            const Provider1 = Fragment;
+            Provider1;
             break;
     }
     return <Provider data-element="Provider" data-component="SwitchAliasDoesNotLeak" data-source-file="test.jsx">{children}</Provider>;
